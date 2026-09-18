@@ -2,11 +2,7 @@ name: Build Flutter APK
 
 on:
   push:
-    branches:
-      - "23-6-2026"
-  pull_request:
-    branches:
-      - "23-6-2026"
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -16,79 +12,31 @@ jobs:
     timeout-minutes: 60
 
     env:
-      # ضبط ذاكرة Gradle لتجنب OOM (exit code 143)
-      GRADLE_OPTS: >-
-        -Dorg.gradle.daemon=false
-        -Dorg.gradle.parallel=true
-        -Dorg.gradle.caching=true
-        -Dorg.gradle.vfs.watch=false
-        -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8"
-        -Dkotlin.incremental=true
-      JAVA_TOOL_OPTIONS: "-Xmx4g -Dfile.encoding=UTF-8"
       FLUTTER_SUPPRESS_ANALYTICS: "true"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-          cache: gradle
+          java-version: "17"
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.8
+          flutter-version: "3.44.8"
           channel: stable
           cache: true
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-home-cache-caches: |
-            caches
-            notifications
-            wrapper
-
-      - name: Cache Pub Packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
-          restore-keys: |
-            pub-${{ runner.os }}-
-
-      - name: Configure Gradle Memory Settings
-        run: |
-          # التأكد من إعدادات الذاكرة في gradle.properties
-          if [ -f android/gradle.properties ]; then
-            # تحديث القيم الموجودة
-            sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8/' android/gradle.properties
-            grep -q "^org.gradle.jvmargs" android/gradle.properties || \
-              echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" >> android/gradle.properties
-            grep -q "^android.useAndroidX" android/gradle.properties || \
-              echo "android.useAndroidX=true" >> android/gradle.properties
-            grep -q "^org.gradle.workers.max" android/gradle.properties || \
-              echo "org.gradle.workers.max=2" >> android/gradle.properties
-          else
-            mkdir -p android
-            cat > android/gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-          org.gradle.parallel=true
-          org.gradle.caching=true
-          org.gradle.workers.max=2
-          android.useAndroidX=true
-          EOF
-          fi
-          cat android/gradle.properties
-
-      - name: Disable Flutter Analytics
-        run: flutter config --no-analytics
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
 
       - name: Flutter Doctor
         run: flutter doctor -v
@@ -96,150 +44,54 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
-      # ============================================================
-      # P3-3: Signing configuration using GitHub Secrets
-      # يتم إنشاء key.properties وملف keystore من الـ Secrets
-      # دون تخزين أي قيم حقيقية داخل الـ YAML
-      # ============================================================
-      - name: Decode Keystore & Create key.properties
-        # تعمل فقط عند توفر كل الـ Secrets المطلوبة (دفع أو تشغيل يدوي)
-        if: ${{ github.event_name != 'pull_request' && env.HAS_KEYSTORE_SECRET == 'true' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        run: |
-          set -euo pipefail
-
-          # 1) إنشاء مجلد android/app في حال لم يكن موجوداً
-          mkdir -p android/app
-
-          # 2) فك تشفير محتوى keystore من base64 وحفظه كملف .jks
-          echo "🔓 Decoding keystore from KEYSTORE_BASE64 secret..."
-          echo -n "$KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.jks
-
-          # 3) ضبط الصلاحيات (قراءة/كتابة للمالك فقط) لأمان إضافي
-          chmod 600 android/app/release-keystore.jks
-
-          # 4) التحقق من أن الملف تم فك تشفيره بنجاح (ليس فارغاً)
-          if [ ! -s android/app/release-keystore.jks ]; then
-            echo "❌ ERROR: Decoded keystore is empty!"
-            exit 1
-          fi
-
-          # 5) إنشاء key.properties ديناميكياً من الـ Secrets
-          #    (key.properties مُستثنى من git عبر android/.gitignore)
-          cat > android/key.properties << EOF
-          storePassword=${KEYSTORE_PASSWORD}
-          keyPassword=${KEY_PASSWORD}
-          keyAlias=${KEY_ALIAS}
-          storeFile=release-keystore.jks
-          EOF
-
-          chmod 600 android/key.properties
-
-          echo "✅ Keystore decoded and key.properties created successfully."
-          echo "📁 Keystore size: $(stat -c%s android/app/release-keystore.jks) bytes"
-          echo "📄 key.properties preview (بدون كلمات السر):"
-          sed 's/Password=.*/Password=***REDACTED***/g' android/key.properties
-
-      - name: Build APK (split per ABI to reduce memory pressure)
-        # يستخدم key.properties للتوقيع تلقائياً عبر android/app/build.gradle.kts
-        # لا يحتاج تمرير أي أسرار في الأمر — Gradle يقرأها من key.properties
-        run: |
-          flutter build apk \
-            --release \
-            --split-per-abi \
-            --no-tree-shake-icons \
-            --verbose
-
-      - name: List Built APKs (for debugging)
-        if: always()
-        run: |
-          echo "=== Built APK files ==="
-          find build/app/outputs/flutter-apk -name "*.apk" -exec ls -lh {} \; || true
-
-      # ============================================================
-      # P3-3 / P1-4: رفع ملف mapping إلى Firebase Crashlytics
-      # يعمل فقط إذا تم تطبيق P1-4 (firebase_crashlytics مُضاف)
-      # ويتطلب وجود FIREBASE_TOKEN أو GCP_SA_KEY كـ Secret
-      # ============================================================
-      - name: Upload Mapping File to Firebase Crashlytics
-        if: success() && hashFiles('pubspec.yaml') != ''
+      - name: Analyze Flutter Project
+        run: flutter analyze
         continue-on-error: true
+
+      # ✅ توقيع الـ APK: release keystore من secrets أو debug keystore احتياطي
+      - name: Setup Android Signing
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASS: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          set -euo pipefail
-
-          # تحقق من تطبيق P1-4: firebase_crashlytics موجود في pubspec.yaml؟
-          if ! grep -q "firebase_crashlytics" pubspec.yaml; then
-            echo "⏭️  firebase_crashlytics غير مضاف في pubspec.yaml — تم تخطي رفع mapping file."
-            echo "    (سيتم تفعيل هذه الخطوة تلقائياً عند تطبيق P1-4)"
-            exit 0
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
+            printf 'storeFile=upload-keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > android/key.properties
+            echo "✅ Using release keystore from secrets"
+          else
+            keytool -genkeypair -v \
+              -keystore android/app/debug.keystore \
+              -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 \
+              -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            printf 'storeFile=debug.keystore\nstorePassword=android\nkeyAlias=androiddebugkey\nkeyPassword=android\n' \
+              > android/key.properties
+            echo "⚠️ No secrets — signed with temporary debug keystore"
           fi
 
-          # تحقق من توفر mapping.txt (ينتج عند تفعيل minify)
-          MAPPING_FILE="build/app/outputs/mapping/release/mapping.txt"
-          if [ ! -f "$MAPPING_FILE" ]; then
-            echo "⚠️  mapping.txt غير موجود في $MAPPING_FILE — تم تخطي الرفع."
-            exit 0
+      - name: Restore google-services.json
+        env:
+          GS_B64: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GS_B64" ]; then
+            echo "$GS_B64" | base64 -d > android/app/google-services.json
           fi
 
-          # تحقّق من توفر Secrets المطلوبة لـ Crashlytics
-          if [ -z "${FIREBASE_TOKEN:-}" ] && [ -z "${GCP_SA_KEY:-}" ]; then
-            echo "⚠️  لا يوجد FIREBASE_TOKEN أو GCP_SA_KEY — تم تخطي رفع mapping file."
-            exit 0
-          fi
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
 
-          echo "📤 Uploading mapping file to Firebase Crashlytics..."
-          echo "   App ID: ${FIREBASE_APP_ID:-<not set>}"
-          echo "   Project: ${FIREBASE_PROJECT_ID:-<not set>}"
+      - name: List APK
+        if: always()
+        run: find build/app/outputs/flutter-apk -name "*.apk" -exec ls -lh {} \; || true
 
-          # إذا تم استخدام Service Account (الأكثر أماناً)
-          if [ -n "${GCP_SA_KEY:-}" ]; then
-            echo "$GCP_SA_KEY" > /tmp/gcp-sa.json
-            export GOOGLE_APPLICATION_CREDENTIALS="/tmp/gcp-sa.json"
-          fi
-
-          # استخدام firebase-tools المثبتة عبر npm لرفع mapping
-          npx --yes firebase-tools crashlytics:mappingfile:upload \
-            --app-id="${FIREBASE_APP_ID:-1:1234567890:android:abcdef}" \
-            --mapping-file="$MAPPING_FILE" \
-            ${GCP_SA_KEY:+} \
-            ${FIREBASE_TOKEN:+--token="$FIREBASE_TOKEN"}
-
-          echo "✅ Mapping file uploaded to Firebase Crashlytics successfully."
-
-          # تنظيف ملف Service Account الحساس
-          if [ -f /tmp/gcp-sa.json ]; then
-            shred -u /tmp/gcp-sa.json 2>/dev/null || rm -f /tmp/gcp-sa.json
-          fi
-
-      - name: Upload APKs
+      - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apks
+          name: ppdeli-store-release-apk
           path: build/app/outputs/flutter-apk/*.apk
           retention-days: 14
-          if-no-files-found: warn
-
-      - name: Upload Build Outputs (on failure for diagnostics)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            android/**/*.log
-            android/**/*.txt
-            **/*.stacktrace
-            build/app/outputs/logs/
-            /tmp/hs_err_pid*.log
-            /tmp/java_pid*.hprof
-          if-no-files-found: ignore
-          retention-days: 7
+          if-no-files-found: error
