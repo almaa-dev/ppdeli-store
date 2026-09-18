@@ -2,7 +2,11 @@ name: Build Flutter APK
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -12,21 +16,17 @@ jobs:
     timeout-minutes: 60
 
     env:
-      FLUTTER_SUPPRESS_ANALYTICS: "true"
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
-      - name: Setup Gradle Cache
-        uses: gradle/actions/setup-gradle@v4
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -35,63 +35,23 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Flutter Doctor
-        run: flutter doctor -v
+      - name: Flutter Version
+        run: flutter --version
 
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Analyze Flutter Project
-        run: flutter analyze
-        continue-on-error: true
+      # التحليل للتنبيه فقط، ولا يوقف الـWorkflow
+      - name: Flutter Analyze
+        run: flutter analyze || true
 
-      # ✅ توقيع الـ APK: release keystore من secrets أو debug keystore احتياطي
-      - name: Setup Android Signing
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASS: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
-            printf 'storeFile=upload-keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
-              "$STORE_PASS" "$KEY_ALIAS" "$KEY_PASS" > android/key.properties
-            echo "✅ Using release keystore from secrets"
-          else
-            keytool -genkeypair -v \
-              -keystore android/app/debug.keystore \
-              -storepass android -keypass android \
-              -alias androiddebugkey -keyalg RSA -keysize 2048 \
-              -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-            printf 'storeFile=debug.keystore\nstorePassword=android\nkeyAlias=androiddebugkey\nkeyPassword=android\n' \
-              > android/key.properties
-            echo "⚠️ No secrets — signed with temporary debug keystore"
-          fi
-
-      - name: Restore google-services.json
-        env:
-          GS_B64: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: |
-          if [ -n "$GS_B64" ]; then
-            echo "$GS_B64" | base64 -d > android/app/google-services.json
-          fi
-
-      - name: Build APK
-        run: flutter build apk --release --no-tree-shake-icons
-
-      - name: List APK
-        if: always()
-        run: find build/app/outputs/flutter-apk -name "*.apk" -exec ls -lh {} \; || true
+      # بناء APK حتى لو ظهرت تحذيرات Analyzer
+      - name: Build Release APK
+        run: flutter build apk --release
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ppdeli-store-release-apk
-          path: build/app/outputs/flutter-apk/*.apk
-          retention-days: 14
+          name: ppdeli-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
