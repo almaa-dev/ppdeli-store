@@ -384,19 +384,23 @@ class AuthController extends GetxController implements GetxService {
   }
 
   Future<void> pickFiles() async {
-    FilePickerResult? result = await FilePicker.pickFiles(
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'],
-      // allowMultiple: false,
+      allowMultiple: true,
     );
 
     if (result != null && result.files.isNotEmpty) {
+      List<PlatformFile> validFiles = [];
       for (var file in result.files) {
         if (file.size > 2000000) {
           showCustomSnackBar('please_upload_lower_size_file'.tr);
         } else {
-          _tinFiles.add(result);
+          validFiles.add(file);
         }
+      }
+      if (validFiles.isNotEmpty) {
+        _tinFiles.add(FilePickerResult(validFiles));
       }
       update();
     }
