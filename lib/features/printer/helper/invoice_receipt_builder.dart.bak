@@ -1,0 +1,1244 @@
+﻿import 'package:flutter/foundation.dart';
+import 'package:flutter_esc_pos_utils/flutter_esc_pos_utils.dart';
+import 'package:get/get.dart';
+
+import 'package:ppdelistore/features/order/domain/models/order_details_model.dart';
+import 'package:ppdelistore/features/order/domain/models/order_model.dart';
+import 'package:ppdelistore/features/printer/domain/models/printer_model.dart';
+import 'package:ppdelistore/features/printer/helper/printer_helper.dart';
+import 'package:ppdelistore/features/profile/controllers/profile_controller.dart';
+import 'package:ppdelistore/features/profile/domain/models/profile_model.dart';
+import 'package:ppdelistore/features/splash/controllers/splash_controller.dart';
+import 'package:ppdelistore/features/store/domain/models/item_model.dart';
+import 'package:ppdelistore/helper/date_converter_helper.dart';
+import 'package:ppdelistore/helper/price_converter_helper.dart';
+
+/// Per-paper column-width layout. Holds the 12-unit-grid widths the
+/// layout sections below need to call `generator.row(...)`. The
+/// factory methods [_ColLayout.standard80] and [_ColLayout.tight58]
+/// return the 80 mm and 58 mm splits respectively. The two columns of
+/// any label/value pair always sum to 12 — that invariant is required
+/// by `flutter_esc_pos_utils.Generator.row`, which throws
+/// "Total columns width must be equal to 12" otherwise.
+///
+/// The item-row split (1/6/2/3) is **identical** on both paper
+/// widths; item names like "Build a Burger" (14 chars) need at least
+/// 13 chars of horizontal room, and 6 units on 58 mm gives ~13 chars.
+/// The label/value split for totals is what actually differs:
+/// 58 mm printers truncate the value at the right edge if the column
+/// starts past the safe printable area, so we widen the value column
+/// from 5 to 6 units and shrink the label column from 7 to 6 to
+/// compensate.
+class _ColLayout {
+  const _ColLayout({
+    required this.index,
+    required this.name,
+    required this.qty,
+    required this.price,
+    required this.label,
+    required this.value,
+  });
+
+  /// 80 mm layout: standard 1 + 6 + 2 + 3 items split, 7 + 5 totals split.
+  const _ColLayout.standard80()
+      : index = 1,
+        name = 6,
+        qty = 2,
+        price = 3,
+        label = 7,
+        value = 5;
+
+  /// 58 mm layout: items use the SAME 1 + 6 + 2 + 3 split as 80 mm so
+  /// 14-char names fit in the 6-unit name column without wrapping;
+  /// totals use a 6 + 6 split so `$ 39.20` fits in the value column.
+  const _ColLayout.tight58()
+      : index = 1,
+        name = 6,
+        qty = 2,
+        price = 3,
+        label = 6,
+        value = 6;
+
+  final int index;
+  final int name;
+  final int qty;
+  final int price;
+  final int label;
+  final int value;
+}
+
+/// Builds a native ESC/POS byte stream for the order invoice.
+///
+/// **The whole point of this builder** is to avoid the heavy
+/// screenshot -> PNG -> decode -> raster -> Bluetooth path. Instead
+/// of rendering a Flutter widget, capturing it, decoding the PNG and
+/// encoding it as raster bitmap bytes, we feed plain text into the
+/// [Generator] API of `flutter_esc_pos_utils` and let it emit standard
+/// ESC/POS commands. The result is an order of magnitude smaller
+/// (~3-6 KB instead of ~150-600 KB) and therefore vastly faster on
+/// Bluetooth.
+///
+/// The output mirrors the visual layout of the on-screen invoice
+/// (`InvoiceDialogWidget`) as closely as possible while staying
+/// strictly inside the limits of the ESC/POS text command set:
+///   * Headers and centred titles use **bold / double-size**.
+///   * Columns are produced through [Generator.row] / [PosColumn].
+///   * Text longer than the available width is **wrapped** across
+///     multiple lines - we never silently truncate names, addresses
+///     or notes.
+///   * Long item names that overflow the [PosColumn] width are
+///     automatically continued on the next row by the [Generator.row]
+///     implementation (the `multiLine: true` default).
+///
+/// All business rules (totals, add-ons, taxes, prescription math,
+/// scheduled time, take-away, delivery address, etc.) match what the
+/// original `InvoiceDialogWidget` did - the only difference is that
+/// the rendering pipeline is now text/commands, not pixels.
+class InvoiceReceiptBuilder {
+  InvoiceReceiptBuilder._();
+
+  // Layout constants — column widths use the 12-unit grid that
+  // `flutter_esc_pos_utils` maps onto BOTH 80 mm (48 cols, 558 dots) and
+  // 58 mm (32 cols, 372 dots). The library's `Generator.row` decides
+  // whether to wrap a column by computing `maxCharactersNb = ((toPos -
+  // fromPos) / charWidth).floor()`, where `charWidth = paperWidth /
+  // charsPerLine * styles.width.value`. With the default
+  // `spaceBetweenRows = 5`, the calculated "safe" printable width is
+  // roughly the column width minus 5 dots.
+  //
+  // On 80 mm printers the resulting margin is plenty, but on 58 mm
+  // printers the absolute position of the rightmost columns
+  // (PRICE / payment / value) ends up only a few dots away from the
+  // paper's right edge. Several 58 mm models (notably Xprinter
+  // XP-N160I) silently truncate or drop characters whose calculated
+  // start position exceeds the physical printable area. The right-hand
+  // value column on the totals block is the worst affected: the value
+  // text either disappears entirely or wraps to a new line.
+  //
+  // To keep the byte stream correct on both paper widths we pick a
+  // **paper-aware column grid**:
+  //
+  //   80 mm: items 1 + 6 + 2 + 3 = 12
+  //          totals label(7) + value(5)  = 12
+  //   58 mm: items 1 + 6 + 2 + 3 = 12  (SAME items split — 14-char
+  //                                       item names still fit in the
+  //                                       6-unit name column)
+  //          totals label(6) + value(6) = 12  (wider value column so
+  //                                            '$ 39.20' never wraps)
+  //
+  // These are selected through the `_cols()` helper at the top of each
+  // layout section so the rest of the code only ever references a
+  // `_ColLayout` struct. The two columns of any label/value pair MUST
+  // sum to exactly 12 — `Generator.row` throws
+  // "Total columns width must be equal to 12" otherwise, which aborts
+  // the whole build() and prevents ANY byte from being sent to the
+  // printer (this is what previously silently dropped the ITEM PRICE /
+  // SUBTOTAL / TAX amounts and the TOTAL value).
+  static _ColLayout _cols(bool is80mm) =>
+      is80mm ? const _ColLayout.standard80() : const _ColLayout.tight58();
+
+  // Separator characters used to mirror the reference image's
+  // mix of solid and dashed rules. Pure-ASCII glyphs so they render
+  // on every thermal printer's default codepage.
+  static const String _solidRule = '-'; // reference: solid 1px line
+  // static const String _heavyRule = '='; // reference: thick black band
+  static const String _dashedRule = '-'; // reference: dotted divider
+
+  // ---------------------------------------------------------------------------
+  // Public entry point
+  // ---------------------------------------------------------------------------
+
+  /// Builds the full invoice ESC/POS bytes for the given order.
+  ///
+  /// The returned bytes **do not include a paper cut**; the caller
+  /// is expected to append one (see [PrinterHelper.buildPaperCutBytes])
+  /// once the Bluetooth write has succeeded.
+  ///
+  /// Returns an empty list if [order] is `null`.
+  static Future<List<int>> build({
+    required OrderModel? order,
+    required List<OrderDetailsModel>? orderDetails,
+    required bool isPrescriptionOrder,
+    required double dmTips,
+    required String paperSize,
+    required PrinterModel printer,
+    bool debugTiming = false,
+  }) async {
+    final Stopwatch? sw = debugTiming ? (Stopwatch()..start()) : null;
+    final List<int> bytes = <int>[];
+
+    if (order == null) {
+      return bytes;
+    }
+
+    final bool is80mm = paperSize != '58mm';
+    final PaperSize paper = is80mm ? PaperSize.mm80 : PaperSize.mm58;
+
+    final CapabilityProfile profile = await PrinterHelper.resolveProfile(
+      printer,
+    );
+
+    final Generator generator = Generator(paper, profile);
+
+    bytes.addAll(generator.reset());
+    bytes.addAll(generator.feed(1));
+
+    bytes.addAll(_buildHeader(generator, is80mm));
+    bytes.addAll(_buildOrderInfo(generator, order));
+    bytes.addAll(_buildScheduledTime(generator, order, is80mm));
+    bytes.addAll(_buildOrderTypeAndPayment(generator, order, is80mm));
+    bytes.addAll(_buildCustomer(generator, order, is80mm));
+    bytes.addAll(
+      _buildItems(
+        generator,
+        orderDetails ?? const <OrderDetailsModel>[],
+        is80mm,
+      ),
+    );
+    bytes.addAll(_buildOrderNote(generator, order));
+    bytes.addAll(
+      _buildTotals(
+        generator,
+        order,
+        is80mm,
+        isPrescriptionOrder: isPrescriptionOrder,
+        dmTips: dmTips,
+        orderDetails: orderDetails ?? const <OrderDetailsModel>[],
+      ),
+    );
+    bytes.addAll(_buildFooter(generator, is80mm));
+
+    bytes.addAll(generator.feed(2));
+
+    if (debugTiming && sw != null) {
+      sw.stop();
+      debugPrint(
+        '[InvoiceReceiptBuilder] built ${bytes.length} bytes in '
+        '${sw.elapsedMilliseconds}ms',
+      );
+    }
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------------
+
+  static Store get _store {
+    try {
+      return Get.find<ProfileController>().profileModel!.stores!.first;
+    } catch (_) {
+      return Store();
+    }
+  }
+
+  /// Formats a price for the printed receipt, matching the on-screen
+  /// preview exactly. Uses the configured currency symbol and direction
+  /// (e.g. `$ 42.68` for `currencySymbolDirection = 'left'` or
+  /// `42.68 $` for `'right'`) so the printed receipt matches what the
+  /// operator sees on the `InvoiceDialogWidget` preview.
+  ///
+  /// Falls back to a plain `toStringAsFixed(2)` when the SplashController
+  /// is not registered or its `configModel` has not been loaded — this
+  /// keeps the print pipeline crash-proof even when the unit-test path
+  /// or an early cold-start calls into the builder.
+  static String _priceDecimal(double price) {
+    try {
+      if (Get.isRegistered<SplashController>() &&
+          Get.find<SplashController>().configModel != null) {
+        return PriceConverterHelper.convertPrice(price);
+      }
+    } catch (_) {
+      // fall through to plain formatting
+    }
+    return price.toStringAsFixed(2);
+  }
+
+  static String _priceSigned(double price, {bool signed = false}) {
+    if (!signed) return _priceDecimal(price);
+    final String absolute = _priceDecimal(price.abs());
+    return price >= 0 ? '+ $absolute' : '- $absolute';
+  }
+
+  static List<int> _hr(Generator generator, {String ch = '-'}) {
+    return generator.hr(ch: ch);
+  }
+
+  /// Three-star ornament line used in the header, mirroring the
+  /// `★ ─── ★ ─── ★` divider on the on-screen preview. ASCII-safe so it
+  /// prints identically on every ESC/POS thermal printer regardless of the
+  /// selected code page (CP437 / CP858 / CP1252 / Latin-1).
+  static String _tripleStarLine({required bool is80mm}) {
+    final int width = is80mm ? 46 : 30;
+    const String core = '* --- * --- *';
+    if (core.length >= width) return core;
+    final int fill = ((width - core.length) / 2).floor();
+    final String pad = fill <= 0 ? '' : ' ' * fill;
+    return '$pad$core$pad';
+  }
+
+  /// Sanitises a string so it is safe to send through the
+  /// `flutter_esc_pos_utils` text encoder (which defaults to latin1).
+  ///
+  /// Most thermal printers sold in MENA retail (Xprinter XP-N160I,
+  /// Rongta, Sunmi V2 Pro, HPRT TP806L, Munbyn ITPP047, generic
+  /// ESC/POS) **do not ship with the Arabic character ROM enabled by
+  /// default** — sending an Arabic UTF-8 sequence causes
+  /// `latin1.encode(...)` to throw `FormatException: Not a valid
+  /// Latin-1 character` and the print job fails silently or aborts
+  /// mid-stream.
+  ///
+  /// Instead of forcing the operator to buy/install a printer with the
+  /// Arabic codepage, we transliterate Arabic (and other non-Latin
+  /// scripts) to their closest Latin equivalents at print time. This
+  /// is the same strategy used by every major POS app that targets
+  /// mobile receipt printers in MENA.
+  ///
+  /// The function is intentionally aggressive — its purpose is to
+  /// **never throw** on a printable receipt.
+  static String _sanitize(String input) {
+    if (input.isEmpty) return input;
+    String out = input;
+
+    // 1) Strip bidi / formatting control chars (RTL marks, ZWJ, etc.)
+    out = out.replaceAll(
+      RegExp(r'[\u200E\u200F\u202A-\u202E\u2066-\u2069]'),
+      '',
+    );
+
+    // 2) Map common Arabic letters / marks to their closest Latin
+    //    counterparts. We intentionally keep this list short and
+    //    pragmatic — transliteration is for thermal receipts, not for
+    //    linguistics.
+    //
+    //    Note that several "extended" letters used by Persian and Urdu
+    //    (e.g. `ی` U+06CC, `ک` U+06A9, `ۀ` U+06C0) have different
+    //    code points from their Arabic-1 equivalents (`ي` U+064A,
+    //    `ك` U+0643, `ه` U+0647). Without explicit entries for the
+    //    extended codepoints the printer receives a `?` for every
+    //    missing letter, which is what produced the "jyd"-style output
+    //    in the second photo for the note "بویت".
+    const Map<String, String> arabicToLatin = <String, String>{
+      // Arabic letters (U+0600–U+06FF block)
+      'ا': 'a', 'أ': 'a', 'إ': 'e', 'آ': 'a',
+      'ب': 'b', 'ت': 't', 'ث': 'th',
+      'ج': 'j', 'ح': 'h', 'خ': 'kh',
+      'د': 'd', 'ذ': 'th',
+      'ر': 'r', 'ز': 'z',
+      'س': 's', 'ش': 'sh',
+      'ص': 's', 'ض': 'd',
+      'ط': 't', 'ظ': 'z',
+      'ع': 'a', 'غ': 'gh',
+      'ف': 'f', 'ق': 'q',
+      'ل': 'l', 'م': 'm', 'ن': 'n',
+      'ه': 'h', 'ة': 'h', 'ء': "'",
+      // Waw + yeh / kaf / heh family — three-way ambiguity between
+      // Arabic, Persian and Urdu codepoints.
+      'و': 'w', // Arabic waw (U+0648)
+      'ك': 'k', // Arabic kaf (U+0643)
+      'ک': 'k', // Persian/Urdu keheh (U+06A9)
+      'ي': 'y', // Arabic yeh (U+064A)
+      'ی': 'y', // Persian/Urdu yeh (U+06CC)
+      'ى': 'a', // Alef maksura (U+0649)
+      'ۀ': 'h', // Heh with yeh above (U+06C0)
+      'ہ': 'h', // Goal heh (U+06C1)
+      'ۂ': 'h', // Goal heh with yeh above (U+06C2)
+      // Persian/Urdu letters that look like Latin letters but mean
+      // something else entirely — these are the ones the Arabic table
+      // used to silently drop to `?`.
+      'چ': 'ch', // Persian cheh (U+0686)
+      'پ': 'p', // Persian peh (U+067E)
+      'ژ': 'zh', // Persian zheh (U+0698)
+      'گ': 'g', // Persian/Urdu geh (U+06AF)
+      'ڤ': 'v', // Persian veh (U+06A4)
+      // Diacritics (harakat, shadda, sukun)
+      'َ': 'a', 'ُ': 'u', 'ِ': 'i',
+      'ً': 'an', 'ٌ': 'un', 'ٍ': 'in',
+      'ْ': '', 'ّ': '',
+    };
+    final StringBuffer sb = StringBuffer();
+    for (int i = 0; i < out.length; i++) {
+      final String ch = out[i];
+      // Pass ASCII straight through — these are always safe.
+      final int code = ch.codeUnitAt(0);
+      if (code < 128) {
+        sb.write(ch);
+        continue;
+      }
+      // Common Latin-1 supplement (accented chars used by Western
+      // European languages) — safe in latin1.
+      if (code >= 0xA0 && code <= 0xFF) {
+        sb.write(ch);
+        continue;
+      }
+      // Known Arabic letter / mark?
+      if (arabicToLatin.containsKey(ch)) {
+        sb.write(arabicToLatin[ch]);
+        continue;
+      }
+      // Persian / Urdu extended letters not in the map above. The
+      // base Arabic block (0x0600-0x06FF) covers every standard
+      // letter in Arabic, Persian and Urdu, so a `?` here means we
+      // genuinely don't have a transliteration — drop to a placeholder
+      // rather than throw.
+      if (code >= 0x0600 && code <= 0x06FF) {
+        sb.write('?');
+        continue;
+      }
+      // Hebrew (range 0x0590–0x05FF) — not common in this app but
+      // possible in customer names.
+      if (code >= 0x0590 && code <= 0x05FF) {
+        sb.write('?');
+        continue;
+      }
+      // Arabic Presentation Forms-A (0xFB50–0xFDFF) and
+      // Presentation Forms-B (0xFE70–0xFEFF): ligatures and contextual
+      // glyphs used in religious / decorative text. Send them through
+      // `?` rather than risk a `FormatException` from `latin1.encode`
+      // — they only appear rarely in delivery addresses and notes.
+      if (code >= 0xFB50 && code <= 0xFEFF) {
+        sb.write('?');
+        continue;
+      }
+      // CJK and other blocks — `flutter_esc_pos_utils` handles them
+      // through the GBK codec when `containsChinese: true` is set,
+      // so we leave them alone.
+      if (code > 0x3000) {
+        sb.write(ch);
+        continue;
+      }
+      // Anything else (currency, symbols, etc.) — drop.
+      sb.write('?');
+    }
+    return sb.toString().trim();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Header
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildHeader(Generator generator, bool is80mm) {
+    final List<int> bytes = <int>[];
+
+    // The configured store name is a single string ("PICKLES AND PIES
+    // FOOD MARKET"). On 80 mm paper (48 chars wide at font A) it fits
+    // on one line at `size2` height with plenty of room to spare. On
+    // 58 mm paper (32 chars wide) the same string *barely* fits at
+    // `size1` height and gets truncated by the printer when we try to
+    // scale it taller. To stay legible on both paper widths we:
+    //
+    //   * 80 mm : print the full name once at `size2` height (the
+    //             on-screen reference image shows the same double-tall
+    //             heading).
+    //   * 58 mm : drop down to `size1` height so the full name fits,
+    //             and bold it for the same visual emphasis.
+    //
+    // When the configured name is empty we fall back to a two-line
+    // "PICKLES AND PIES / FOOD MARKET" header that mirrors the
+    // reference image exactly.
+    final String fallbackStoreName = 'PICKLES AND PIES';
+    final String fallbackStoreName2 = 'FOOD MARKET';
+    final String rawStoreName = ((_store.name ?? '').trim());
+    final bool hasConfiguredName = rawStoreName.isNotEmpty;
+    // When we have a configured store name we print it on the first
+    // heading line and leave the second line empty — the operator typed
+    // a complete business name in one field, we don't invent a second
+    // line for them. When the name field is empty we fall back to a
+    // two-line "PICKLES AND PIES / FOOD MARKET" header that mirrors
+    // the reference image exactly.
+    final String storeName = _sanitize(
+      hasConfiguredName ? rawStoreName : fallbackStoreName,
+    ).toUpperCase();
+    final String storeName2 = hasConfiguredName
+        ? ''
+        : _sanitize(fallbackStoreName2).toUpperCase();
+
+    if (storeName.isNotEmpty) {
+      // On 58 mm we force `size1` height so the configured store name
+      // always fits on a single line. On 80 mm we keep the larger
+      // `size2` heading from the reference image.
+      final PosTextSize headingHeight = is80mm
+          ? PosTextSize.size2
+          : PosTextSize.size1;
+      bytes.addAll(
+        generator.text(
+          storeName,
+          styles: PosStyles(
+            align: PosAlign.center,
+            bold: true,
+            reverse: false,
+            height: headingHeight,
+            width: PosTextSize.size1,
+          ),
+        ),
+      );
+      if (storeName2.isNotEmpty) {
+        bytes.addAll(
+          generator.text(
+            storeName2,
+            styles: const PosStyles(
+              align: PosAlign.center,
+              bold: true,
+              reverse: false,
+              height: PosTextSize.size1,
+              width: PosTextSize.size1,
+            ),
+          ),
+        );
+      }
+    }
+
+    bytes.addAll(
+      generator.text(
+        _tripleStarLine(is80mm: is80mm),
+        styles: const PosStyles(align: PosAlign.center),
+      ),
+    );
+
+    if ((_store.address ?? '').isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          _sanitize(_store.address!),
+          styles: const PosStyles(align: PosAlign.center, bold: true),
+        ),
+      );
+    }
+    final String phoneNumber = (_store.phone ?? '').trim();
+    if (phoneNumber.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          _sanitize('Phone: $phoneNumber'),
+          styles: const PosStyles(align: PosAlign.center, bold: true),
+        ),
+      );
+    }
+
+    bytes.addAll(_hr(generator, ch: _solidRule));
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Order info (#id  /  date time)
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildOrderInfo(Generator generator, OrderModel order) {
+    final List<int> bytes = <int>[];
+
+    final String orderNo = '# ${order.id ?? ''}';
+    String dateLine = '';
+    String timeLine = '';
+    try {
+      if (order.createdAt != null) {
+        final String raw = DateConverterHelper.dateTimeStringToMonthAndTime(
+          order.createdAt!,
+        );
+        final List<String> lines = raw
+            .split('\n')
+            .map((String e) => e.trim())
+            .where((String e) => e.isNotEmpty)
+            .toList();
+        if (lines.isNotEmpty) dateLine = lines[0];
+        if (lines.length > 1) timeLine = lines[1];
+      }
+    } catch (_) {
+      dateLine = order.createdAt ?? '';
+    }
+
+    // The reference image shows `# id` bold left, the date bold right
+    // on the same line, and the time bold right on the line below.
+    //
+    // IMPORTANT: we emit the date and the time as TWO separate rows rather
+    // than stacking "date\ntime" inside a single right-hand column. When a
+    // literal `\n` is embedded in a `row()` column, `Generator._text` right-
+    // aligns using the *combined* byte length, which shoves the whole block
+    // off to the left and makes the time wrap badly on narrow 58 mm paper.
+    // Two rows keep the date (row 1) and the time (row 2) each flush right
+    // on both 80 mm and 58 mm.
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: _sanitize(orderNo),
+          width: 6,
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize(dateLine),
+          width: 6,
+          styles: const PosStyles(align: PosAlign.right, bold: true),
+        ),
+      ]),
+    );
+    if (timeLine.isNotEmpty) {
+      bytes.addAll(
+        generator.row(<PosColumn>[
+          PosColumn(
+            text: '',
+            width: 6,
+            styles: const PosStyles(align: PosAlign.left, bold: true),
+          ),
+          PosColumn(
+            text: _sanitize(timeLine),
+            width: 6,
+            styles: const PosStyles(align: PosAlign.right, bold: true),
+          ),
+        ]),
+      );
+    }
+
+    bytes.addAll(_hr(generator, ch: _dashedRule));
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scheduled time
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildScheduledTime(
+    Generator generator,
+    OrderModel order,
+    bool is80mm,
+  ) {
+    final List<int> bytes = <int>[];
+    if (order.scheduled != 1) return bytes;
+
+    final _ColLayout cols = _cols(is80mm);
+
+    String dateLine = '';
+    try {
+      if (order.scheduleAt != null) {
+        dateLine = DateConverterHelper.dateTimeStringToDateTime(
+          order.scheduleAt!,
+        );
+      }
+    } catch (_) {
+      dateLine = order.scheduleAt ?? '';
+    }
+
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: _sanitize('${'scheduled_order_time'.tr}:'),
+          width: cols.label,
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize(dateLine),
+          width: cols.value,
+          styles: const PosStyles(align: PosAlign.right),
+        ),
+      ]),
+    );
+    // bytes.addAll(_hr(generator, ch: '-'));
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Order type / payment method
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildOrderTypeAndPayment(
+    Generator generator,
+    OrderModel order,
+    bool is80mm,
+  ) {
+    final List<int> bytes = <int>[];
+
+    final String type = _normalizeLabel(order.orderType);
+    final String pay = _normalizeLabel(order.paymentMethod.toString());
+    if (type.isEmpty && pay.isEmpty) return bytes;
+
+    // Reference image shows a dashed band above AND below the
+    // "Delivery | Cash On Delivery" row with a small breathing space.
+    //
+    // Column widths are paper-aware:
+    //   * 80 mm: 5-unit type + 7-unit payment (~18 chars fits
+    //     "CASH ON DELIVERY" comfortably).
+    //   * 58 mm: 4-unit type + 8-unit payment (the right column needs
+    //     to be wider on narrow paper so the same string still fits in
+    //     one row; the type column is still plenty for "DELIVERY" /
+    //     "TAKE AWAY").
+    final int typeWidth = is80mm ? 5 : 4;
+    final int payWidth = is80mm ? 7 : 8;
+    bytes.addAll(generator.feed(1));
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: type,
+          width: typeWidth,
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+        PosColumn(
+          text: pay,
+          width: payWidth,
+          styles: const PosStyles(align: PosAlign.right, bold: true),
+        ),
+      ]),
+    );
+    bytes.addAll(_hr(generator, ch: _dashedRule));
+    return bytes;
+  }
+
+  /// Normalises an order-type / payment-method value the same way the
+  /// preview widget does: translation key first, otherwise fall back to a
+  /// derived Title Case ("cash_on_delivery" → "Cash On Delivery").
+  /// The result is uppercased to match the reference image.
+  static String _normalizeLabel(String? raw) {
+    if (raw == null || raw.isEmpty) return '';
+    String translated = '';
+    try {
+      translated = raw.tr;
+    } catch (_) {
+      translated = raw;
+    }
+    if (translated.isEmpty || translated == raw) {
+      final String pretty = raw
+          .replaceAll('_', ' ')
+          .split(' ')
+          .where((String s) => s.isNotEmpty)
+          .map((String s) => s[0].toUpperCase() + s.substring(1))
+          .join(' ');
+      return pretty.toUpperCase();
+    }
+    return translated.toUpperCase();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Customer block (delivery address)
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildCustomer(
+    Generator generator,
+    OrderModel order,
+    bool is80mm,
+  ) {
+    final List<int> bytes = <int>[];
+
+    if (order.orderType == 'take_away') {
+      return bytes;
+    }
+
+    final String name = order.deliveryAddress?.contactPersonName ?? '';
+    final String address = order.deliveryAddress?.address ?? '';
+    final String phone = order.deliveryAddress?.contactPersonNumber ?? '';
+
+    if (name.isEmpty && address.isEmpty && phone.isEmpty) {
+      return bytes;
+    }
+
+    // The on-screen preview uses emoji icons (👤 / 📍 / 📞) to flag each
+    // line of the customer block. Those glyphs sit outside latin1 and
+    // `_sanitize` would strip them down to the first printable codepoint
+    // — historically this produced a one-letter "C" / "A" / "P" column
+    // that confused operators. We now render the same visual cue with
+    // an ASCII bullet (`*`) prefix so the line still reads as a tagged
+    // entry on every thermal printer without depending on the active
+    // codepage.
+    if (name.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          '* ${_sanitize(name)}',
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+      );
+    }
+    if (address.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          '* ${_sanitize(address)}',
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+      );
+    }
+    if (phone.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          '* ${_sanitize(phone)}',
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+      );
+    }
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Items table
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildItems(
+    Generator generator,
+    List<OrderDetailsModel> orderDetails,
+    bool is80mm,
+  ) {
+    final List<int> bytes = <int>[];
+    final _ColLayout cols = _cols(is80mm);
+
+    // Items-table header row — the reference image shows a black band
+    // with white reversed text `# ITEM INFO  QTY  PRICE`. ESC/POS
+    // renders `reverse: true` as white-on-black, which reproduces that
+    // band on every thermal head. Column widths match the item rows
+    // below so the columns line up exactly.
+    //
+    // On 58 mm paper the bold + reverse combo combined with the tight
+    // column grid frequently caused the column widths to wrap onto
+    // separate physical lines (one word per row), so on 58 mm we drop
+    // the reverse band and keep the header as a plain bold row. The
+    // text content is the same; only the styling differs.
+    bytes.addAll(generator.hr());
+    final PosStyles headerStyle80 = const PosStyles(
+      align: PosAlign.center,
+      bold: true,
+      reverse: true,
+    );
+    final PosStyles headerLeft80 = const PosStyles(
+      align: PosAlign.left,
+      bold: true,
+      reverse: true,
+    );
+    final PosStyles headerRight80 = const PosStyles(
+      align: PosAlign.right,
+      bold: true,
+      reverse: true,
+    );
+    final PosStyles headerStyle58 = const PosStyles(
+      align: PosAlign.center,
+      bold: true,
+    );
+    final PosStyles headerLeft58 = const PosStyles(
+      align: PosAlign.left,
+      bold: true,
+    );
+    final PosStyles headerRight58 = const PosStyles(
+      align: PosAlign.right,
+      bold: true,
+    );
+
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: _sanitize('#'),
+          width: cols.index,
+          styles: is80mm ? headerStyle80 : headerStyle58,
+        ),
+        PosColumn(
+          text: _sanitize('item_info'.tr.toUpperCase()),
+          width: cols.name,
+          styles: is80mm ? headerLeft80 : headerLeft58,
+        ),
+        PosColumn(
+          text: _sanitize('qty'.tr.toUpperCase()),
+          width: cols.qty,
+          styles: is80mm ? headerStyle80 : headerStyle58,
+        ),
+        PosColumn(
+          text: _sanitize('price'.tr.toUpperCase()),
+          width: cols.price,
+          styles: is80mm ? headerRight80 : headerRight58,
+        ),
+      ]),
+    );
+    bytes.addAll(_hr(generator, ch: _solidRule));
+
+    for (int index = 0; index < orderDetails.length; index++) {
+      final OrderDetailsModel d = orderDetails[index];
+      // Thin separator line between items — mirrors the Divider between
+      // each ListTile on the on-screen preview so the table reads as a
+      // grid even on thermal paper.
+      if (index > 0) {
+        bytes.addAll(_hr(generator, ch: _solidRule));
+      }
+      bytes.addAll(_buildItemRow(generator, index, d, is80mm));
+    }
+    // Close the items table with a rule so the totals block begins cleanly.
+    bytes.addAll(_hr(generator, ch: _solidRule));
+    return bytes;
+  }
+
+  static List<int> _buildItemRow(
+    Generator generator,
+    int index,
+    OrderDetailsModel detail,
+    bool is80mm,
+  ) {
+    final List<int> bytes = <int>[];
+    final _ColLayout cols = _cols(is80mm);
+
+    final String name = detail.itemDetails?.name ?? '';
+    final String qty = (detail.quantity ?? 0).toString();
+    final String price = _priceDecimal(detail.price ?? 0);
+
+    // Main columns: name is the most legible, qty centred, price right.
+    // Column widths MUST match the items-table header row above so the
+    // `# ITEM INFO QTY PRICE` band aligns exactly with the data rows.
+    //
+    // We use `height: size2` (double-tall) but keep `width: size1`
+    // (single-wide). Doubling the horizontal character cell as well
+    // would collapse the item name column to only 3 characters per
+    // line and force `Build a Burger` to wrap to 3 lines, which is
+    // unreadable. Double-height gives the same visual emphasis the
+    // on-screen preview uses while keeping the name on at most 2 lines.
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: (index + 1).toString(),
+          width: cols.index,
+          styles: const PosStyles(align: PosAlign.center, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize(name),
+          width: cols.name,
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize(qty),
+          width: cols.qty,
+          styles: const PosStyles(align: PosAlign.center, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize(price),
+          width: cols.price,
+          styles: const PosStyles(align: PosAlign.right, bold: true),
+        ),
+      ]),
+    );
+
+    // Variations — subordinated under the name with an indented ASCII bullet.
+    // We use '*' instead of '•' because the bullet character (U+2022) sits
+    // outside latin1 and would trigger a FormatException on most ESC/POS
+    // printers in the default code page; '*' renders identically on every
+    // thermal head and matches the '• ' indent of the on-screen design.
+    // Variations are indented to sit directly under the item-name column,
+    // matching the reference ('• Veggie' starts at the name gutter). The
+    // indent scales with the paper width (6 columns on 80 mm, 4 on 58 mm)
+    // so the sub-lines always align under the product name regardless of
+    // printer width — no drift into the QTY / PRICE columns.
+    final String indent = is80mm ? '      ' : '    ';
+    final List<String> variations = _resolveVariations(detail);
+    for (final String v in variations) {
+      bytes.addAll(generator.text('$indent* ${_sanitize(v)}'));
+    }
+
+    // Add-ons — a small bold label then indented list.
+    final List<String> addons = _resolveAddOns(detail);
+    if (addons.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          _sanitize('addons'.tr.toUpperCase()),
+          styles: const PosStyles(bold: true),
+        ),
+      );
+      for (final String a in addons) {
+        bytes.addAll(generator.text('$indent* ${_sanitize(a)}'));
+      }
+    }
+
+    // Customer note — bold inline label "Note:" then the value on the same
+    // line; mirrors the on-screen preview exactly. We keep the note text
+    // unbolded so long Arabic / RTL notes wrap safely through [_sanitize].
+    final String note = (detail.note ?? '').trim();
+    if (note.isNotEmpty) {
+      bytes.addAll(
+        generator.row(<PosColumn>[
+          PosColumn(
+            text: _sanitize('${'note'.tr.toUpperCase()}:'),
+            width: 4,
+            styles: const PosStyles(align: PosAlign.left, bold: true),
+          ),
+          PosColumn(
+            text: _sanitize(note),
+            width: 8,
+            styles: const PosStyles(align: PosAlign.left),
+          ),
+        ]),
+      );
+    }
+    return bytes;
+  }
+
+  static List<String> _resolveVariations(OrderDetailsModel detail) {
+    final List<String> result = <String>[];
+
+    final List<Variation>? legacy = detail.variation;
+    if (legacy != null && legacy.isNotEmpty) {
+      final String? rawType = legacy.first.type;
+      if (rawType != null && rawType.isNotEmpty) {
+        result.addAll(_splitVariationText(rawType));
+      }
+    }
+
+    final List<FoodVariation>? rich = detail.foodVariation;
+    if ((rich ?? const <FoodVariation>[]).isNotEmpty) {
+      for (final FoodVariation v in rich!) {
+        final List<String> values = <String>[];
+        for (final VariationValue vv
+            in v.variationValues ?? const <VariationValue>[]) {
+          if ((vv.level ?? '').isNotEmpty) values.add(vv.level!);
+        }
+        if (values.isNotEmpty) result.add(values.join(', '));
+      }
+    }
+    return result;
+  }
+
+  static List<String> _splitVariationText(String raw) {
+    if (raw.trim().isEmpty) return const <String>[];
+
+    final RegExp parenExp = RegExp(r'\(([^)]+)\)');
+    final Iterable<Match> matches = parenExp.allMatches(raw);
+    if (matches.isNotEmpty) {
+      final List<String> parenResult = <String>[];
+      for (final Match m in matches) {
+        final String inside = m.group(1)!.trim();
+        if (inside.isEmpty) continue;
+        if (inside.contains(',')) {
+          for (final String v in inside.split(',')) {
+            final String vt = v.trim();
+            if (vt.isNotEmpty) parenResult.add(vt);
+          }
+        } else {
+          parenResult.add(inside);
+        }
+      }
+      if (parenResult.isNotEmpty) return parenResult;
+    }
+
+    final List<String> result = <String>[];
+    for (final String part in raw.split(',')) {
+      String trimmed = part.trim();
+      if (trimmed.isEmpty) continue;
+      final int sepIndex = trimmed.indexOf(' - ');
+      if (sepIndex >= 0) trimmed = trimmed.substring(sepIndex + 3).trim();
+      if (trimmed.isNotEmpty) result.add(trimmed);
+    }
+    return result;
+  }
+
+  static List<String> _resolveAddOns(OrderDetailsModel detail) {
+    final List<String> out = <String>[];
+    for (final AddOn a in detail.addOns ?? const <AddOn>[]) {
+      if ((a.name ?? '').isEmpty) continue;
+      out.add('${a.name} x${a.quantity ?? 0}');
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Order-level note
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildOrderNote(Generator generator, OrderModel order) {
+    final List<int> bytes = <int>[];
+    final String note = (order.orderNote ?? '').trim();
+    if (note.isEmpty) return bytes;
+    bytes.addAll(_hr(generator, ch: _solidRule));
+    bytes.addAll(
+      generator.text(
+        _sanitize('order_note'.tr.toUpperCase()),
+        styles: const PosStyles(bold: true),
+      ),
+    );
+    bytes.addAll(generator.text(_sanitize(note)));
+    bytes.addAll(_hr(generator));
+    return bytes;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Totals
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildTotals(
+    Generator generator,
+    OrderModel order,
+    bool is80mm, {
+    required bool isPrescriptionOrder,
+    required double dmTips,
+    required List<OrderDetailsModel> orderDetails,
+  }) {
+    final List<int> bytes = <int>[];
+
+    double itemsPrice = 0;
+    if (isPrescriptionOrder) {
+      final double orderAmount = order.orderAmount ?? 0;
+      final double discount = order.storeDiscountAmount ?? 0;
+      final double tax = order.totalTaxAmount ?? 0;
+      final double deliveryCharge = order.deliveryCharge ?? 0;
+      final double additionalCharge = order.additionalCharge ?? 0;
+      final bool taxIncluded = order.taxStatus ?? false;
+      itemsPrice =
+          (orderAmount + discount) -
+          ((taxIncluded ? 0 : tax) + deliveryCharge + additionalCharge) -
+          dmTips;
+    }
+
+    double addOnsTotal = 0;
+    for (final OrderDetailsModel d in orderDetails) {
+      for (final AddOn a in d.addOns ?? const <AddOn>[]) {
+        addOnsTotal += (a.price ?? 0) * (a.quantity ?? 0);
+      }
+      if (!isPrescriptionOrder) {
+        itemsPrice += (d.price ?? 0) * (d.quantity ?? 0);
+      }
+    }
+
+    if (itemsPrice > 0 && !isPrescriptionOrder) {
+      // Reference image shows `Item Price / Subtotal / Tax` on a subtle
+      // light-gray background, NOT a heavy black band. On ESC/POS we
+      // approximate that look by emitting plain bold lines for these
+      // rows. The heavy black band is reserved for the TOTAL row below,
+      // matching the reference image exactly.
+      bytes.addAll(
+        _addPriceLine(generator, 'ITEM PRICE', itemsPrice, is80mm: is80mm),
+      );
+    }
+    if (addOnsTotal > 0) {
+      bytes.addAll(
+        _addPriceLine(generator, 'ADDONS', addOnsTotal, is80mm: is80mm),
+      );
+    }
+
+    final double subtotal = itemsPrice + addOnsTotal;
+    if (subtotal > 0 && !isPrescriptionOrder) {
+      bytes.addAll(
+        _addPriceLine(generator, 'SUBTOTAL', subtotal, is80mm: is80mm),
+      );
+    }
+
+    if ((order.totalTaxAmount ?? 0) > 0) {
+      bytes.addAll(
+        _addPriceLine(
+          generator,
+          'TAX',
+          order.totalTaxAmount!,
+          signed: true,
+          is80mm: is80mm,
+        ),
+      );
+    }
+
+    bytes.addAll(generator.feed(1));
+    // bytes.addAll(_hr(generator, ch: _heavyRule));
+    bytes.addAll(generator.hr());
+
+    // The TOTAL row uses the paper-aware label/value split so the
+    // value column always has enough horizontal room for the currency
+    // string on both 80 mm and 58 mm.
+    final _ColLayout cols = _cols(is80mm);
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: 'TOTAL',
+          width: cols.label,
+          styles: const PosStyles(
+            align: PosAlign.left,
+            bold: true,
+            reverse: true,
+            height: PosTextSize.size2,
+          ),
+        ),
+        PosColumn(
+          text: _priceDecimal(order.orderAmount ?? 0),
+          width: cols.value,
+          styles: const PosStyles(
+            align: PosAlign.right,
+            bold: true,
+            reverse: true,
+            height: PosTextSize.size2,
+          ),
+        ),
+      ]),
+    );
+    // bytes.addAll(_hr(generator, ch: _heavyRule));
+    bytes.addAll(generator.hr());
+    return bytes;
+  }
+
+  static List<int> _addPriceLine(
+    Generator generator,
+    String label,
+    double amount, {
+    bool signed = false,
+    required bool is80mm,
+  }) {
+    final String value = _priceSigned(amount, signed: signed);
+    // The label/value column split is paper-aware:
+    //   * 80 mm: label(7) + value(5)  (~30 + ~21 chars on 80 mm)
+    //   * 58 mm: label(6) + value(6)  (~16 + ~16 chars on 58 mm)
+    // The 6 + 6 split on 58 mm is what lets '$ 39.20' or '+ $ 3.48'
+    // land inside the safe printable area instead of being dropped at
+    // the right edge of the paper.
+    //
+    // These rows are deliberately PLAIN bold (no `reverse` black band):
+    // the reference image shows `Item Price / Subtotal / Tax` on a
+    // subtle light background, with the heavy black band reserved for
+    // the TOTAL row alone. Emitting them as reversed bands also made
+    // the right-aligned number get clipped on several thermal
+    // printers, which is why the amounts looked missing even though
+    // the labels printed.
+    final _ColLayout cols = _cols(is80mm);
+    return generator.row(<PosColumn>[
+      PosColumn(
+        text: _sanitize(label.toUpperCase()),
+        width: cols.label,
+        styles: const PosStyles(
+          align: PosAlign.left,
+          bold: true,
+        ),
+      ),
+      PosColumn(
+        text: value,
+        width: cols.value,
+        styles: const PosStyles(
+          align: PosAlign.right,
+          bold: true,
+        ),
+      ),
+    ]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Footer
+  // ---------------------------------------------------------------------------
+
+  static List<int> _buildFooter(Generator generator, bool is80mm) {
+    final List<int> bytes = <int>[];
+
+    // On 58 mm paper the `Thank You` line at `size2` height (16 chars)
+    // is the only heading in the footer, so it still fits cleanly.
+    // We keep `size2` here on both paper widths because the on-screen
+    // preview also shows the thank-you as a tall bold heading.
+    bytes.addAll(
+      generator.text(
+        _sanitize('${_ornamentGlyph()} Thank You ${_ornamentGlyph()}'),
+        styles: const PosStyles(
+          align: PosAlign.center,
+          bold: true,
+          height: PosTextSize.size2,
+        ),
+      ),
+    );
+    bytes.addAll(generator.feed(1));
+
+    final String leftText = 'Pickles and Pies';
+    final _ColLayout cols = _cols(is80mm);
+    bytes.addAll(
+      generator.row(<PosColumn>[
+        PosColumn(
+          text: _sanitize(leftText.toUpperCase()),
+          width: cols.label,
+          styles: const PosStyles(align: PosAlign.left, bold: true),
+        ),
+        PosColumn(
+          text: _sanitize('@ ${DateTime.now().year}'),
+          width: cols.value,
+          styles: const PosStyles(align: PosAlign.right, bold: true),
+        ),
+      ]),
+    );
+
+    return bytes;
+  }
+
+  /// ASCII-safe ornament glyph used to flank the "THANK YOU" headline —
+  /// the reference image uses `✹` (U+2739) which is not in latin1; we use
+  /// `*` which every thermal printer can render.
+  static String _ornamentGlyph() => '*';
+}

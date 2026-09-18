@@ -1,0 +1,77 @@
+{
+  "project_info": {
+    "project_number": "422412778152",
+    "firebase_url": "https://ppdeli-f07a9-default-rtdb.firebaseio.com",
+    "project_id": "ppdeli-f07a9",
+    "storage_bucket": "ppdeli-f07a9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:422412778152:android:83c2b403a662f58e24e09d",
+        "android_client_info": {
+          "package_name": "com.ppdeli.deliverystore"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "422412778152-rcdirb48435tifo5pslno4dplan1bhcm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyClR9gV_285DgJviVaWvZrgkc2_Bb2wNwQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "422412778152-rcdirb48435tifo5pslno4dplan1bhcm.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:422412778152:android:bbe20039b88aa6f124e09d",
+        "android_client_info": {
+          "package_name": "com.ppdeli.market"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "422412778152-912skipe7jprjcr5tthlquocfh8qddd2.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.ppdeli.market",
+            "certificate_hash": "e718df55854b9bdec89f29e9d73199b1bf7b5388"
+          }
+        },
+        {
+          "client_id": "422412778152-rcdirb48435tifo5pslno4dplan1bhcm.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyClR9gV_285DgJviVaWvZrgkc2_Bb2wNwQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "422412778152-rcdirb48435tifo5pslno4dplan1bhcm.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
