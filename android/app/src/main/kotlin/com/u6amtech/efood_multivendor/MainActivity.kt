@@ -1,4 +1,4 @@
-package com.ppdeli.deliveystore
+package com.ppdeli.deliverystore
 
 import io.flutter.embedding.android.FlutterActivity
 
