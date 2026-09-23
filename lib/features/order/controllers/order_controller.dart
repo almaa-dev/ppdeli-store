@@ -45,6 +45,15 @@ class OrderController extends GetxController implements GetxService {
   int get historyIndex => _historyIndex;
 
   final List<String> _statusList = ['all', 'delivered', 'refunded', 'canceled'];
+    final List<String> _statusList = [
+    'all',
+    'delivered',
+    'picked_up',
+    'refunded',
+    'pickedup',
+    'canceled',
+  ];
+
   List<String> get statusList => _statusList;
 
   bool _paginate = false;
@@ -165,6 +174,7 @@ class OrderController extends GetxController implements GetxService {
         RunningOrderModel(status: 'confirmed', orderList: []),
         RunningOrderModel(status: 'ready_for_handover', orderList: []),
         RunningOrderModel(status: 'food_on_the_way', orderList: []),
+        RunningOrderModel(status: 'food_on_pickedup', orderList: []),
         RunningOrderModel(status: 'canceled', orderList: []),
       ];
       _runningOrderList!.addAll(runningOrderList);
@@ -324,6 +334,7 @@ class OrderController extends GetxController implements GetxService {
     _runningOrders![2].orderList = [];
     _runningOrders![3].orderList = [];
     _runningOrders![4].orderList = [];
+    _runningOrders![5].orderList = [];
     for (var order in _runningOrderList!) {
       if (order.orderStatus == 'pending' &&
           (Get.find<SplashController>().configModel!.orderConfirmationModel !=
@@ -343,10 +354,14 @@ class OrderController extends GetxController implements GetxService {
           order.orderStatus == 'cooking') {
         // Cooking tab removed: collapse processing/cooking/handover into ready_for_handover
         _runningOrders![2].orderList.add(order);
-      } else if (order.orderStatus == 'picked_up') {
+      } else if (order.orderStatus == 'delivered' &&
+          order.orderType == 'delivery') {
         _runningOrders![3].orderList.add(order);
-      } else if (order.orderStatus == 'canceled') {
+      }  else if (order.orderStatus == 'delivered' &&
+          order.orderType == 'take_away') {
         _runningOrders![4].orderList.add(order);
+      } else if (order.orderStatus == 'canceled') {
+        _runningOrders![5].orderList.add(order);
       }
     }
   }

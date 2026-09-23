@@ -98,6 +98,7 @@
   "cooking": "Cooking",
   "ready_for_handover": "Out for Delivery",
   "food_on_the_way": "Delivered",
+  "food_on_pickedup": "Picked Up",
   "campaign_order": "Campaign Order",
   "order_history": "Order History",
   "addons": "Addons",
