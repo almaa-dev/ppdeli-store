@@ -44,7 +44,7 @@ class OrderController extends GetxController implements GetxService {
   int _historyIndex = 0;
   int get historyIndex => _historyIndex;
 
-  final List<String> _statusList = ['all', 'delivered', 'refunded', 'canceled'];
+  // final List<String> _statusList = ['all', 'delivered', 'refunded', 'canceled'];
     final List<String> _statusList = [
     'all',
     'delivered',
