@@ -47,9 +47,9 @@ class OrderController extends GetxController implements GetxService {
   // final List<String> _statusList = ['all', 'delivered', 'refunded', 'canceled'];
     final List<String> _statusList = [
     'all',
+    'confirmed',
+    'handover',
     'delivered',
-    'picked_up',
-    'refunded',
     'pickedup',
     'canceled',
   ];

@@ -1078,11 +1078,15 @@ class InvoiceReceiptBuilder {
     final String phone = order.deliveryAddress?.contactPersonNumber ?? '';
     final String streetNumber = (order.deliveryAddress?.streetNumber ?? '')
         .trim();
+    final String house = (order.deliveryAddress?.house ?? '').trim();
+    final String floor = (order.deliveryAddress?.floor ?? '').trim();
 
     if (name.isEmpty &&
         address.isEmpty &&
         phone.isEmpty &&
-        streetNumber.isEmpty) {
+        streetNumber.isEmpty &&
+        house.isEmpty &&
+        floor.isEmpty) {
       return bytes;
     }
 
@@ -1111,13 +1115,39 @@ class InvoiceReceiptBuilder {
     }
     // Print the streetNumber (mapped from the JSON key `road`) on its own
     // line directly under the customer name, only when it is non-empty.
-    // This matches the on-screen preview where the road / street number
-    // appears as a separate bullet line under the customer heading.
+    // Label is translated via "street_number" → "Apartment Number".
     if (streetNumber.isNotEmpty) {
-      for (final String line in _wrapText(
-        '* ${_sanitize(streetNumber)}',
-        budget,
-      )) {
+      final String label = _sanitize('street_number'.tr);
+      final String body = '* $label: ${_sanitize(streetNumber)}';
+      for (final String line in _wrapText(body, budget)) {
+        bytes.addAll(
+          generator.text(
+            line,
+            styles: const PosStyles(align: PosAlign.left, bold: true),
+          ),
+        );
+      }
+    }
+    // Print the house field as a separate line, only when non-empty.
+    // Label is translated via "house" → "State".
+    if (house.isNotEmpty) {
+      final String label = _sanitize('house'.tr);
+      final String body = '* $label: ${_sanitize(house)}';
+      for (final String line in _wrapText(body, budget)) {
+        bytes.addAll(
+          generator.text(
+            line,
+            styles: const PosStyles(align: PosAlign.left, bold: true),
+          ),
+        );
+      }
+    }
+    // Print the floor field as a separate line, only when non-empty.
+    // Label is translated via "floor" → "ZIP Code".
+    if (floor.isNotEmpty) {
+      final String label = _sanitize('floor'.tr);
+      final String body = '* $label: ${_sanitize(floor)}';
+      for (final String line in _wrapText(body, budget)) {
         bytes.addAll(
           generator.text(
             line,

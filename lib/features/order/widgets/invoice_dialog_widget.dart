@@ -523,6 +523,116 @@ class InvoiceDialogWidget extends StatelessWidget {
                                     ],
                                   ),
                                 ),
+                                                              // ── Street Number (label: "Apartment Number") ──
+                              if ((order!.deliveryAddress?.streetNumber ??
+                                          '')
+                                      .trim()
+                                      .isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '🏢 ',
+                                        style: TextStyle(
+                                          fontSize: fontSize + 1,
+                                          color: Colors.deepPurple,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${'street_number'.tr}: ',
+                                        style: robotoBold.copyWith(
+                                          color: Colors.black,
+                                          fontSize: fontSize,
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          order!.deliveryAddress!
+                                              .streetNumber!,
+                                          style: robotoMedium.copyWith(
+                                            color: Colors.black,
+                                            fontSize: fontSize,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              // ── House (label: "State") ──
+                              if ((order!.deliveryAddress?.house ?? '')
+                                      .trim()
+                                      .isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '🗺️ ',
+                                        style: TextStyle(
+                                          fontSize: fontSize + 1,
+                                          color: Colors.orange,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${'house'.tr}: ',
+                                        style: robotoBold.copyWith(
+                                          color: Colors.black,
+                                          fontSize: fontSize,
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          order!.deliveryAddress!.house!,
+                                          style: robotoMedium.copyWith(
+                                            color: Colors.black,
+                                            fontSize: fontSize,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              // ── Floor (label: "ZIP Code") ──
+                              if ((order!.deliveryAddress?.floor ?? '')
+                                      .trim()
+                                      .isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '📮 ',
+                                        style: TextStyle(
+                                          fontSize: fontSize + 1,
+                                          color: Colors.brown,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${'floor'.tr}: ',
+                                        style: robotoBold.copyWith(
+                                          color: Colors.black,
+                                          fontSize: fontSize,
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          order!.deliveryAddress!.floor!,
+                                          style: robotoMedium.copyWith(
+                                            color: Colors.black,
+                                            fontSize: fontSize,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
                         ),
