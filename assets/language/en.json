@@ -247,7 +247,7 @@
   "product_updated_successfully": "Product updated successfully",
   "product_deleted_successfully": "Product deleted successfully",
   "are_you_sure_want_to_delete_this_product": "Are you sure want to delete this product?",
-  "swipe_to_deliver_order": "Swipe to Deliver Order",
+  "swipe_to_deliver_order": "Swipe to Complete Order",
   "swipe_to_confirm_order": "Swipe to Confirm Order",
   "are_you_sure_to_confirm": "Are you sure to confirm?",
   "you_want_to_confirm_this_order": "You want to confirm this order?",
@@ -571,7 +571,7 @@
   "meta_key_word": "Meta Key Word",
   "maximum_order_quantity": "Maximum Order Quantity",
   "add_maximum_item_order_quantity": "Add maximum item order quantity",
-  "complete_delivery": "Complete Delivery",
+  "complete_delivery": "Complete",
   "from_camera": "From Camera",
   "from_gallery": "From Gallery",
   "completed_after_delivery_picture": "Completed After Delivery Picture",
@@ -861,7 +861,6 @@
   "please_enable_your_location_and_bluetooth_in_your_system": "Please enable your location and bluetooth in your system",
   "no_thermal_printer_connected": "No thermal printer connected",
   "paired_bluetooth": "Paired Bluetooth",
-  "connected": "Connected",
   "click_to_connect": "Click to Connect",
   "are_you_sure_you_want_to_switch_to_this_plan": "Are you sure you want to switch to this plan?",
   "you_are_about_to_downgrade_your_plan_after_subscribing_to_this_plan_your_oldest": "You are about to downgrade your plan. After subscribing to this plan, your oldest",
@@ -1438,7 +1437,6 @@
   "enter_minimum_delivery_charge" : "Enter Minimum Delivery Charge",
   "enter_maximum_delivery_charge_more_than_0" : "Enter Maximum Delivery Charge more than 0",
   "restaurant_config" : "Restaurant Config",
-
   "item_name_required" : "Item Name Required",
   "generating" : "Generating",
   "hi_there" : "Hi There,",
@@ -1760,5 +1758,9 @@
   "diagnostics_force_reconnect": "Force reconnect",
   "open_printers": "Open Printers",
   "unable_to_load_printers": "Unable to load printers. Please try again.",
-  "printer_unavailable": "Printer not available. Please check the printer screen."
+  "printer_unavailable": "Printer not available. Please check the printer screen.",
+  "reconnect_now": "Reconnect now",
+  "auto_print_failed": "Could not print the invoice automatically.",
+  "auto_print_failed_check_printer": "Printing failed. Please check the printer connection.",
+  "auto_print_failed_no_printer": "No printer paired. Please open the Printer screen and pair one."
 }

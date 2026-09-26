@@ -441,6 +441,21 @@ class PrinterController extends GetxController implements GetxService {
 
   /// Refreshes [bluetoothEnabled] and the connection status of every
   /// printer currently in [printers].
+  /// **Fix #2 (paired-but-plugin-disconnected):** the previous
+  /// implementation forced `connectedMac.value = null` whenever the
+  /// plugin's `connectionStatus` returned false, even though Android
+  /// often already has a healthy Bluetooth socket to the default
+  /// printer — the plugin just lost track of it after a reboot,
+  /// Bluetooth toggle, or simply because the user opened the app
+  /// without first opening the Printer screen. This produced the
+  /// "red Disconnected" badge while the receipt was actually printable.
+  ///
+  /// The new path: when the plugin says "disconnected" but Bluetooth is
+  /// on **and** the default printer appears in the OS-level paired
+  /// list, we issue a real `connect(...)` call to resynchronise the
+  /// plugin's internal state, then update `connectedMac.value` based on
+  /// the actual outcome. Only when no such reconciliation is possible
+  /// do we fall back to `null`.
   Future<void> refreshStatus() async {
     PrinterLogger.d(_tag, 'refreshStatus()');
     bluetoothEnabled.value = await printerRepository.isBluetoothEnabled();
@@ -451,6 +466,38 @@ class PrinterController extends GetxController implements GetxService {
         connectedMac.value = def.address;
       } else {
         connectedMac.value = printerRepository.getLastConnectedAddress();
+      }
+    } else if (bluetoothEnabled.value && defaultPrinter.value != null) {
+      // Plugin says disconnected but BT is on and we have a saved
+      // default — try to reconcile against the OS-level paired list.
+      final PrinterModel def = defaultPrinter.value!;
+      try {
+        final List<PrinterModel> paired =
+            await printerRepository.scanPairedPrinters();
+        final bool isPairedOnSystem = paired.any(
+          (PrinterModel p) =>
+              p.address.toUpperCase() == def.address.toUpperCase(),
+        );
+        if (isPairedOnSystem) {
+          PrinterLogger.i(
+            _tag,
+            'plugin disconnected but printer is paired on system — '
+            're-establishing connection to ${def.address}',
+          );
+          final bool reconnected =
+              await printerRepository.connect(def.address);
+          connectedMac.value = reconnected ? def.address : null;
+        } else {
+          PrinterLogger.d(
+            _tag,
+            'plugin disconnected and printer not in paired list — '
+            'leaving connectedMac=null',
+          );
+          connectedMac.value = null;
+        }
+      } catch (e, st) {
+        PrinterLogger.w(_tag, 'paired-list reconciliation threw', e, st);
+        connectedMac.value = null;
       }
     } else {
       connectedMac.value = null;

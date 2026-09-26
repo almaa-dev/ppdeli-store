@@ -22,6 +22,7 @@ import 'package:ppdelistore/helper/route_helper.dart';
 import 'package:ppdelistore/util/app_constants.dart';
 import 'package:ppdelistore/util/dimensions.dart';
 import 'package:ppdelistore/util/images.dart';
+import 'package:ppdelistore/util/printer_logger.dart';
 import 'package:ppdelistore/util/styles.dart';
 import 'package:ppdelistore/common/widgets/confirmation_dialog_widget.dart';
 import 'package:ppdelistore/common/widgets/custom_app_bar_widget.dart';
@@ -33,7 +34,6 @@ import 'package:ppdelistore/features/order/widgets/amount_input_dialogue_widget.
 import 'package:ppdelistore/features/order/widgets/camera_button_sheet_widget.dart';
 import 'package:ppdelistore/features/order/widgets/cancellation_dialogue_widget.dart';
 import 'package:ppdelistore/features/order/widgets/collect_money_delivery_sheet_widget.dart';
-import 'package:ppdelistore/features/order/widgets/dialogue_image_widget.dart';
 import 'package:ppdelistore/features/order/widgets/order_item_widget.dart';
 import 'package:ppdelistore/features/order/widgets/slider_button_widget.dart';
 import 'package:ppdelistore/features/order/widgets/verify_delivery_sheet_widget.dart';
@@ -132,49 +132,148 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     _startApiCalling();
   }
 
-  /// Builds and prints the invoice using native ESC/POS commands.
-  ///
-  /// **No screenshot, no PNG, no image decode/rasterise.** The
-  /// [PrinterHelper.buildInvoiceBytes] builder walks the live
-  /// [OrderModel] / [OrderDetailsModel] structures and emits
-  /// plain-text ESC/POS bytes. The result is a tiny byte stream
-  /// (~3-6 KB instead of ~150-600 KB) that prints much faster on
-  /// the Bluetooth link.
-  ///
-  /// Designed to be triggered immediately after the order details
-  /// are loaded so the receipt is printed with no further user
-  /// interaction.
+///
+/// **No screenshot, no PNG, no image decode/rasterise.** The
+/// [PrinterHelper.buildInvoiceBytes] builder walks the live
+/// [OrderModel] / [OrderDetailsModel] structures and emits
+/// plain-text ESC/POS bytes. The result is a tiny byte stream
+/// (~3-6 KB instead of ~150-600 KB) that prints much faster on
+/// the Bluetooth link.
+///
+/// Designed to be triggered immediately after the order details
+/// are loaded so the receipt is printed with no further user
+/// interaction.
+///
+/// **Fix #1 (auto-print reliability):** the original implementation
+/// (a) silently bailed out when the order data was still loading,
+/// (b) relied solely on [PrinterController.printInvoice] which
+/// returns false the moment the plugin's `connectionStatus` is
+/// false (even though Android may already have an active BT socket
+/// to the default printer), and (c) swallowed every exception with
+/// a debug-only print, so the user had zero feedback when printing
+/// failed. The rewritten version:
+///   1. Retries up to 10x300 ms for the order data instead of a
+///      single 400 ms wait.
+///   2. If the default printer is set but the plugin reports
+///      disconnected, kicks off a silent reconnect before invoking
+///      the print.
+///   3. Falls back to a connected or first saved printer if no
+///      default is configured.
+///   4. Surfaces a visible snackbar to the user when printing fails.
   Future<void> _autoPrintInvoice() async {
+    const String logTag = 'autoPrint';
     try {
       final OrderController orderController = Get.find<OrderController>();
+
+      // (1) Wait — with retry — for the order data to load.
+      for (int i = 0; i < 10; i++) {
+        if (orderController.orderModel != null &&
+            orderController.orderDetailsModel != null) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
       if (orderController.orderModel == null ||
           orderController.orderDetailsModel == null) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-        if (orderController.orderModel == null ||
-            orderController.orderDetailsModel == null) {
-          return;
+        PrinterLogger.w(
+          logTag,
+          'order data not loaded after 3s — skipping auto print',
+        );
+        return;
+      }
+
+      final PrinterController printerController =
+          Get.find<PrinterController>();
+
+    // (2) Resolve a candidate printer. Prefer the configured default;
+      // fall back to whichever saved printer the plugin already considers
+      // connected; fall back to the first saved printer; otherwise stop.
+      PrinterModel? candidate = printerController.defaultPrinter.value;
+      if (candidate == null) {
+        for (final PrinterModel p in printerController.printers) {
+          if (printerController.connectedMac.value == p.address) {
+            candidate = p;
+            break;
+          }
+        }
+      }
+      candidate ??= printerController.printers.isNotEmpty
+          ? printerController.printers.first
+          : null;
+
+      if (candidate == null) {
+        PrinterLogger.w(logTag, 'no printer paired at all');
+        if (Get.context != null) {
+          showCustomSnackBar(
+            'auto_print_failed_no_printer'.tr,
+            isError: true,
+          );
+        }
+        return;
+      }
+
+      // (3) If the plugin believes we are disconnected but Bluetooth is
+      // on and the printer is paired, attempt a silent reconnect. This
+      // closes the gap between "Android sees the printer" and
+      // "the plugin's connectionStatus == false".
+      if (printerController.connectedMac.value != candidate.address &&
+          printerController.bluetoothEnabled.value) {
+        PrinterLogger.i(
+          logTag,
+          'plugin disconnected — silent reconnect to ${candidate.address}',
+        );
+        try {
+          await printerController.reconnectDefaultPrinter(silent: true);
+        } catch (e, st) {
+          PrinterLogger.w(logTag, 'silent reconnect threw', e, st);
         }
       }
 
-      final PrinterController printerController = Get.find<PrinterController>();
-      await printerController.printInvoice(
-        ticketBuilder: (PrinterModel p) => PrinterHelper.buildInvoiceBytes(
-          order: orderController.orderModel,
-          orderDetails: orderController.orderDetailsModel,
-          isPrescriptionOrder:
-              orderController.orderModel?.prescriptionOrder ?? false,
-          dmTips: orderController.orderModel!.dmTips ?? 0,
-          paperSize: p.printerType,
-          printer: p,
-          // Surface the configurable Additional Charge label so the
-          // printed totals block matches the on-screen preview.
-          additionalChargeName:
-              Get.find<SplashController>().configModel?.additionalChargeName,
-        ),
-      );
-    } catch (e) {
-      if (kDebugMode) {
-        print('auto-print failed: $e');
+      // (4) Build the ticket once and route it through the explicit
+      // printInvoiceForPrinter path so a non-default printer also works.
+      Future<List<int>> ticketBuilder(PrinterModel p) =>
+          PrinterHelper.buildInvoiceBytes(
+            order: orderController.orderModel,
+            orderDetails: orderController.orderDetailsModel,
+            isPrescriptionOrder:
+                orderController.orderModel?.prescriptionOrder ?? false,
+            dmTips: orderController.orderModel!.dmTips ?? 0,
+            paperSize: p.printerType,
+            printer: p,
+            // Surface the configurable Additional Charge label so the
+            // printed totals block matches the on-screen preview.
+            additionalChargeName: Get.find<SplashController>()
+                .configModel
+                ?.additionalChargeName,
+          );
+
+      final bool isDefault = printerController.defaultPrinter.value?.address ==
+          candidate.address;
+      final bool printed = isDefault
+          ? await printerController.printInvoice(ticketBuilder: ticketBuilder)
+          : await printerController.printInvoiceForPrinter(
+              candidate,
+              ticketBuilder: ticketBuilder,
+            );
+
+      if (!printed) {
+        PrinterLogger.w(
+          logTag,
+          'print returned false for ${candidate.name}',
+        );
+        if (Get.context != null) {
+          showCustomSnackBar(
+            'auto_print_failed_check_printer'.tr,
+            isError: true,
+          );
+        }
+      } else {
+        PrinterLogger.i(logTag, 'auto print OK → ${candidate.name}');
+      }
+    } catch (e, st) {
+      PrinterLogger.e(logTag, 'auto-print threw', e, st);
+      if (Get.context != null) {
+        showCustomSnackBar('auto_print_failed'.tr, isError: true);
       }
     }
   }
