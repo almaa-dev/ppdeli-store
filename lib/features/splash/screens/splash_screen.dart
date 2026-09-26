@@ -5,6 +5,7 @@ import 'package:ppdelistore/features/dashboard/screens/dashboard_screen.dart';
 import 'package:ppdelistore/features/profile/controllers/profile_controller.dart';
 import 'package:ppdelistore/features/splash/controllers/splash_controller.dart';
 import 'package:ppdelistore/features/notification/domain/models/notification_body_model.dart';
+import 'package:ppdelistore/features/order/screens/order_details_screen.dart';
 import 'package:ppdelistore/features/rental_module/chat/screens/taxi_chat_screen.dart';
 import 'package:ppdelistore/features/rental_module/profile/controllers/taxi_profile_controller.dart';
 import 'package:ppdelistore/features/rental_module/trips/screens/trip_details_screen.dart';
@@ -124,10 +125,24 @@ class SplashScreenState extends State<SplashScreen> {
             ),
           );
         } else {
+          // Pass an OrderDetailsScreen instance via Get.arguments so the
+          // screen is built with `autoPrint: true` and `autoConfirm: true`.
+          // The screen's `loadData` then (a) flips the order to `confirmed`
+          // silently if it is still pending and (b) prints the invoice
+          // once the order data is available — fulfilling the requirement
+          // that opening a new-order notification auto-confirms and
+          // auto-prints.
           Get.toNamed(
             RouteHelper.getOrderDetailsRoute(
               notificationBody?.orderId,
               fromNotification: true,
+            ),
+              arguments: OrderDetailsScreen(
+              orderId: notificationBody!.orderId!,
+              isRunningOrder: false,
+              fromNotification: true,
+              autoPrint: true,
+              autoConfirm: true,
             ),
           );
         }

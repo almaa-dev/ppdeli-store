@@ -142,6 +142,8 @@ class OrderWidget extends StatelessWidget {
                         Text(
                           orderModel.orderType == 'delivery'
                               ? 'home_delivery'.tr
+                              : orderModel.orderType == 'take_away'
+                              ? 'take_away'.tr
                               : orderModel.orderType!.tr,
                           style: robotoMedium.copyWith(
                             fontSize: Dimensions.fontSizeSmall,

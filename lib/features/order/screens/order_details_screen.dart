@@ -93,11 +93,24 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     // call started by the dialog itself may not have completed by the time
     // we load the order, so this acts as a defensive fallback that keeps
     // the order in the `confirmed` state without showing any snackbar.
-    if (widget.autoConfirm &&
-        Get.find<OrderController>().orderModel != null &&
-        Get.find<OrderController>().orderModel!.orderStatus == 'pending') {
+    // (`autoConfirm: true`) OR directly from a new-order notification
+    // (`fromNotification: true` on a still-pending order), fire a silent
+    // `updateOrderStatus` to move the order into the `confirmed` state.
+    // The [OrderController] call started by the dialog itself may not have
+    // completed by the time we load the order, so this acts as a defensive
+    // fallback that keeps the order in the `confirmed` state without
+    // showing any snackbar.
+    final OrderController orderController = Get.find<OrderController>();
+    final bool shouldAutoConfirm =
+        widget.autoConfirm ||
+        (widget.fromNotification &&
+            orderController.orderModel != null &&
+            orderController.orderModel!.orderStatus == AppConstants.pending);
+    if (shouldAutoConfirm &&
+        orderController.orderModel != null &&
+        orderController.orderModel!.orderStatus == AppConstants.pending) {
       unawaited(
-        Get.find<OrderController>().updateOrderStatus(
+        orderController.updateOrderStatus(
           widget.orderId,
           AppConstants.confirmed,
           silent: true,
@@ -107,7 +120,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
 
     // If the screen was opened from the "Confirm Order" dialog, kick off
     // an automatic print of the invoice after the data is loaded.
-    if (widget.autoPrint) {
+    if (widget.autoPrint || widget.fromNotification) {
       // Run after the current frame so the UI has time to render and the
       // [OrderController] has emitted a `GetBuilder` update.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -3167,12 +3180,13 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                           '=====jjj : ${Get.find<SplashController>().configModel!.orderDeliveryVerification} ; ${controllerOrderModel.paymentMethod}',
                                                         );
                                                       }
-                                                      Get.dialog(
-                                                        const DialogImageWidget(),
-                                                        barrierDismissible:
-                                                            false,
-                                                      );
-                                                      nextStatus = null;
+                                                      // Get.dialog(
+                                                      //   const DialogImageWidget(),
+                                                      //   barrierDismissible:
+                                                      //       false,
+                                                      // );
+                                                      nextStatus = AppConstants
+                                                          .delivered;
                                                     } else {
                                                       nextStatus = AppConstants
                                                           .delivered;
@@ -3194,36 +3208,36 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                   // vendor can mark delivery orders
                                                   // (not only take_away / self-delivery)
                                                   // as delivered directly from the slider.
-                                                  if (Get.find<
-                                                            SplashController
-                                                          >()
-                                                          .configModel!
-                                                          .orderDeliveryVerification! ||
-                                                      controllerOrderModel
-                                                              .paymentMethod ==
-                                                          'cash_on_delivery') {
-                                                    orderController
-                                                        .changeDeliveryImageStatus();
-                                                    if (kDebugMode) {
-                                                      print(
-                                                        '=====jjj : ${Get.find<SplashController>().configModel!.dmPictureUploadStatus!}',
-                                                      );
-                                                    }
-                                                    if (Get.find<
-                                                          SplashController
-                                                        >()
-                                                        .configModel!
-                                                        .dmPictureUploadStatus!) {
-                                                      Get.dialog(
-                                                        const DialogImageWidget(),
-                                                        barrierDismissible:
-                                                            false,
-                                                      );
-                                                    }
-                                                  } else {
+                                                  // if (Get.find<
+                                                  //           SplashController
+                                                  //         >()
+                                                  //         .configModel!
+                                                  //         .orderDeliveryVerification! ||
+                                                  //     controllerOrderModel
+                                                  //             .paymentMethod ==
+                                                  //         'cash_on_delivery') {
+                                                  //   orderController
+                                                  //       .changeDeliveryImageStatus();
+                                                  //   if (kDebugMode) {
+                                                  //     print(
+                                                  //       '=====jjj : ${Get.find<SplashController>().configModel!.dmPictureUploadStatus!}',
+                                                  //     );
+                                                  //   }
+                                                  //   if (Get.find<
+                                                  //         SplashController
+                                                  //       >()
+                                                  //       .configModel!
+                                                  //       .dmPictureUploadStatus!) {
+                                                  //     Get.dialog(
+                                                  //       const DialogImageWidget(),
+                                                  //       barrierDismissible:
+                                                  //           false,
+                                                  //     );
+                                                  //   }
+                                                  // } else {
                                                     nextStatus =
                                                         AppConstants.delivered;
-                                                  }
+                                                  // }
                                                 }
 
                                                 if (nextStatus != null) {

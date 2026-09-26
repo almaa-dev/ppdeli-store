@@ -11,6 +11,7 @@ import 'package:ppdelistore/features/chat/controllers/chat_controller.dart';
 import 'package:ppdelistore/features/dashboard/screens/dashboard_screen.dart';
 import 'package:ppdelistore/features/notification/controllers/notification_controller.dart';
 import 'package:ppdelistore/features/order/controllers/order_controller.dart';
+import 'package:ppdelistore/features/order/screens/order_details_screen.dart';
 import 'package:ppdelistore/features/notification/domain/models/notification_body_model.dart';
 import 'package:ppdelistore/features/rental_module/chat/controllers/taxi_chat_controller.dart';
 import 'package:ppdelistore/features/rental_module/chat/screens/taxi_chat_screen.dart';
@@ -60,10 +61,25 @@ class NotificationHelper {
                     ),
                   );
                 } else {
+                  // Pass an OrderDetailsScreen instance via Get.arguments so
+                  // the screen is built with `autoPrint: true` and
+                  // `autoConfirm: true`. The screen's `loadData` then
+                  // (a) flips the order to `confirmed` silently if it is
+                  // still pending and (b) prints the invoice once the
+                  // order data is available — fulfilling the requirement
+                  // that opening a new-order notification auto-confirms
+                  // and auto-prints.
                   Get.toNamed(
                     RouteHelper.getOrderDetailsRoute(
                       payload.orderId,
                       fromNotification: true,
+                    ),
+                      arguments: OrderDetailsScreen(
+                      orderId: payload.orderId!,
+                      isRunningOrder: false,
+                      fromNotification: true,
+                      autoPrint: true,
+                      autoConfirm: true,
                     ),
                   );
                 }
@@ -257,10 +273,25 @@ class NotificationHelper {
                 ),
               );
             } else {
+              // Pass an OrderDetailsScreen instance via Get.arguments so the
+              // screen is built with `autoPrint: true` and
+              // `autoConfirm: true`. The screen's `loadData` then
+              // (a) flips the order to `confirmed` silently if it is
+              // still pending and (b) prints the invoice once the order
+              // data is available — fulfilling the requirement that
+              // opening a new-order notification auto-confirms and
+              // auto-prints.              
               Get.toNamed(
                 RouteHelper.getOrderDetailsRoute(
                   int.parse(message.data['order_id']),
                   fromNotification: true,
+                ),
+                  arguments: OrderDetailsScreen(
+                  orderId: int.parse(message.data['order_id']),
+                  isRunningOrder: false,
+                  fromNotification: true,
+                  autoPrint: true,
+                  autoConfirm: true,
                 ),
               );
             }

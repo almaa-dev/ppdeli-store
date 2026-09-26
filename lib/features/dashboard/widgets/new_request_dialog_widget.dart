@@ -104,6 +104,7 @@ class _NewRequestDialogWidgetState extends State<NewRequestDialogWidget> {
           isRunningOrder: false,
           fromNotification: true,
           autoPrint: true,
+          autoConfirm: true,
         ),
       );
     }
