@@ -1325,7 +1325,6 @@
   "coupon_status_updated" : "Coupon Status Updated",
   "vehicle_upload" : "Vehicle Upload",
   "you_cannot_select_before_current_time" : "You can't select before current time",
-
   "notification_is_disabled_please_allow_notification" : "Notification is disabled. Please allow notification",
   "for_better_performance_allow_notification_to_run_in_background" : "For better performance, allow notification to run in the background",
   "system_notification" : "System Notification",
@@ -1339,7 +1338,6 @@
   "notification_will_always_send_alert_from_the_background" : "Notification will always send alert from the background",
   "notification_will_not_always_send_alert_from_the_background" : "Notification will not always send alert from the background",
   "make_sure_to_enable_app_notifications_first" : "Make sure to enable app notifications first",
-
   "per_day" : "Per Day",
   "enter_per_day_price" : "Enter Per Day Price",
   "per_day_price_cannot_be_zero" : "Per Day Price can not be 0",

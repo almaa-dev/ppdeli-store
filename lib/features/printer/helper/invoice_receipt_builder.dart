@@ -1128,34 +1128,34 @@ class InvoiceReceiptBuilder {
         );
       }
     }
-    // Print the house field as a separate line, only when non-empty.
-    // Label is translated via "house" → "State".
-    if (house.isNotEmpty) {
-      final String label = _sanitize('house'.tr);
-      final String body = '* $label: ${_sanitize(house)}';
-      for (final String line in _wrapText(body, budget)) {
-        bytes.addAll(
-          generator.text(
-            line,
-            styles: const PosStyles(align: PosAlign.left, bold: true),
-          ),
-        );
-      }
-    }
-    // Print the floor field as a separate line, only when non-empty.
-    // Label is translated via "floor" → "ZIP Code".
-    if (floor.isNotEmpty) {
-      final String label = _sanitize('floor'.tr);
-      final String body = '* $label: ${_sanitize(floor)}';
-      for (final String line in _wrapText(body, budget)) {
-        bytes.addAll(
-          generator.text(
-            line,
-            styles: const PosStyles(align: PosAlign.left, bold: true),
-          ),
-        );
-      }
-    }
+    // // Print the house field as a separate line, only when non-empty.
+    // // Label is translated via "house" → "State".
+    // if (house.isNotEmpty) {
+    //   final String label = _sanitize('house'.tr);
+    //   final String body = '* $label: ${_sanitize(house)}';
+    //   for (final String line in _wrapText(body, budget)) {
+    //     bytes.addAll(
+    //       generator.text(
+    //         line,
+    //         styles: const PosStyles(align: PosAlign.left, bold: true),
+    //       ),
+    //     );
+    //   }
+    // }
+    // // Print the floor field as a separate line, only when non-empty.
+    // // Label is translated via "floor" → "ZIP Code".
+    // if (floor.isNotEmpty) {
+    //   final String label = _sanitize('floor'.tr);
+    //   final String body = '* $label: ${_sanitize(floor)}';
+    //   for (final String line in _wrapText(body, budget)) {
+    //     bytes.addAll(
+    //       generator.text(
+    //         line,
+    //         styles: const PosStyles(align: PosAlign.left, bold: true),
+    //       ),
+    //     );
+    //   }
+    // }
     if (address.isNotEmpty) {
       for (final String line in _wrapText('* ${_sanitize(address)}', budget)) {
         bytes.addAll(
