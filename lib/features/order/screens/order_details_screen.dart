@@ -3264,16 +3264,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                   // For delivery-man flow,
                                                   // we still need handover first.
                                                   if (isSelfOrTakeAway) {
-                                                    if (Get.find<
-                                                              SplashController
-                                                            >()
-                                                            .configModel!
-                                                            .orderDeliveryVerification! ||
-                                                        controllerOrderModel
-                                                                .paymentMethod ==
-                                                            'cash_on_delivery') {
-                                                      orderController
-                                                          .changeDeliveryImageStatus();
+                                                    if (Get.find<SplashController>().configModel!.orderDeliveryVerification! ||
+                                                        controllerOrderModel.paymentMethod == 'cash_on_delivery') {
+                                                      orderController .changeDeliveryImageStatus();
                                                       if (kDebugMode) {
                                                         print(
                                                           '=====jjj : ${Get.find<SplashController>().configModel!.orderDeliveryVerification} ; ${controllerOrderModel.paymentMethod}',
@@ -3284,11 +3277,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                       //   barrierDismissible:
                                                       //       false,
                                                       // );
-                                                      nextStatus = AppConstants
-                                                          .delivered;
+                                                      nextStatus = AppConstants.delivered;
                                                     } else {
-                                                      nextStatus = AppConstants
-                                                          .delivered;
+                                                      nextStatus = AppConstants.delivered;
                                                     }
                                                   } else {
                                                     nextStatus =
@@ -3356,8 +3347,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                                 'take_away' ||
                                                             restConfModel ||
                                                             selfDelivery))
-                                                    ? 'swipe_to_confirm_order'
-                                                          .tr
+                                                    ? 'swipe_to_handover'.tr
                                                     : (controllerOrderModel
                                                                   .orderStatus ==
                                                               'confirmed' ||

@@ -247,6 +247,7 @@
   "product_updated_successfully": "Product updated successfully",
   "product_deleted_successfully": "Product deleted successfully",
   "are_you_sure_want_to_delete_this_product": "Are you sure want to delete this product?",
+  "swipe_to_handover": "Swipe to Ready",
   "swipe_to_deliver_order": "Swipe to Complete Order",
   "swipe_to_confirm_order": "Swipe to Confirm Order",
   "are_you_sure_to_confirm": "Are you sure to confirm?",
