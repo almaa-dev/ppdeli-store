@@ -3277,9 +3277,9 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                       //   barrierDismissible:
                                                       //       false,
                                                       // );
-                                                      nextStatus = AppConstants.delivered;
+                                                      nextStatus = AppConstants.handover;
                                                     } else {
-                                                      nextStatus = AppConstants.delivered;
+                                                      nextStatus = AppConstants.handover;
                                                     }
                                                   } else {
                                                     nextStatus =
