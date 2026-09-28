@@ -3246,88 +3246,23 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                     selfDelivery;
 
                                                 String? nextStatus;
-                                                if (orderStatus == 'pending' &&
-                                                    isSelfOrTakeAway) {
-                                                  nextStatus =
-                                                      AppConstants.confirmed;
-                                                } else if (orderStatus ==
-                                                        'confirmed' ||
-                                                    (orderStatus ==
-                                                            'accepted' &&
-                                                        controllerOrderModel
-                                                                .confirmed !=
-                                                            null)) {
-                                                  // Cooking tab removed:
-                                                  // skip processing/cooking and
-                                                  // jump straight to delivered
-                                                  // for self-delivery / take-away.
-                                                  // For delivery-man flow,
-                                                  // we still need handover first.
-                                                  if (isSelfOrTakeAway) {
-                                                    if (Get.find<SplashController>().configModel!.orderDeliveryVerification! ||
-                                                        controllerOrderModel.paymentMethod == 'cash_on_delivery') {
-                                                      orderController .changeDeliveryImageStatus();
-                                                      if (kDebugMode) {
-                                                        print(
-                                                          '=====jjj : ${Get.find<SplashController>().configModel!.orderDeliveryVerification} ; ${controllerOrderModel.paymentMethod}',
-                                                        );
-                                                      }
-                                                      // Get.dialog(
-                                                      //   const DialogImageWidget(),
-                                                      //   barrierDismissible:
-                                                      //       false,
-                                                      // );
-                                                      nextStatus = AppConstants.handover;
-                                                    } else {
-                                                      nextStatus = AppConstants.handover;
-                                                    }
-                                                  } else {
+                                                // 4-state order lifecycle:
+                                                //   pending    -> confirmed
+                                                //   confirmed  -> handover
+                                                //   handover   -> delivered
+                                                switch (orderStatus) {
+                                                  case AppConstants.pending:
+                                                    nextStatus =
+                                                        AppConstants.confirmed;
+                                                    break;
+                                                  case AppConstants.confirmed:
                                                     nextStatus =
                                                         AppConstants.handover;
-                                                  }
-                                                } else if (orderStatus ==
-                                                        'processing' ||
-                                                    orderStatus == 'cooking') {
-                                                  nextStatus =
-                                                      AppConstants.handover;
-                                                } else if (orderStatus ==
-                                                    'handover') {
-                                                  // Apply the same swipe-to-deliver
-                                                  // logic for every order type in the
-                                                  // "ready for handover" state, so the
-                                                  // vendor can mark delivery orders
-                                                  // (not only take_away / self-delivery)
-                                                  // as delivered directly from the slider.
-                                                  // if (Get.find<
-                                                  //           SplashController
-                                                  //         >()
-                                                  //         .configModel!
-                                                  //         .orderDeliveryVerification! ||
-                                                  //     controllerOrderModel
-                                                  //             .paymentMethod ==
-                                                  //         'cash_on_delivery') {
-                                                  //   orderController
-                                                  //       .changeDeliveryImageStatus();
-                                                  //   if (kDebugMode) {
-                                                  //     print(
-                                                  //       '=====jjj : ${Get.find<SplashController>().configModel!.dmPictureUploadStatus!}',
-                                                  //     );
-                                                  //   }
-                                                  //   if (Get.find<
-                                                  //         SplashController
-                                                  //       >()
-                                                  //       .configModel!
-                                                  //       .dmPictureUploadStatus!) {
-                                                  //     Get.dialog(
-                                                  //       const DialogImageWidget(),
-                                                  //       barrierDismissible:
-                                                  //           false,
-                                                  //     );
-                                                  //   }
-                                                  // } else {
+                                                    break;
+                                                  case AppConstants.handover:
                                                     nextStatus =
                                                         AppConstants.delivered;
-                                                  // }
+                                                    break;
                                                 }
 
                                                 if (nextStatus != null) {
@@ -3339,40 +3274,16 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                                                 }
                                               },
                                               label: Text(
-                                                (controllerOrderModel
-                                                                .orderStatus ==
-                                                            'pending' &&
-                                                        (controllerOrderModel
-                                                                    .orderType ==
-                                                                'take_away' ||
-                                                            restConfModel ||
-                                                            selfDelivery))
-                                                    ? 'swipe_to_handover'.tr
-                                                    : (controllerOrderModel
-                                                                  .orderStatus ==
-                                                              'confirmed' ||
-                                                          (controllerOrderModel
-                                                                      .orderStatus ==
-                                                                  'accepted' &&
-                                                              controllerOrderModel
-                                                                      .confirmed !=
-                                                                  null))
-                                                    ? 'swipe_to_deliver_order'
-                                                          .tr
-                                                    : (controllerOrderModel
-                                                                  .orderStatus ==
-                                                              'processing' ||
-                                                          controllerOrderModel
-                                                                  .orderStatus ==
-                                                              'cooking')
-                                                    ? 'swipe_if_ready_for_handover'
-                                                          .tr
-                                                    : (controllerOrderModel
-                                                              .orderStatus ==
-                                                          'handover')
-                                                    ? 'swipe_to_deliver_order'
-                                                          .tr
-                                                    : '',
+                                                 switch (controllerOrderModel
+                                                    .orderStatus) {
+                                                  AppConstants.pending =>
+                                                    'swipe_to_confirm_order'.tr,
+                                                  AppConstants.confirmed =>
+                                                    'swipe_to_handover'.tr,
+                                                  AppConstants.handover =>
+                                                    'swipe_to_deliver_order'.tr,
+                                                  _ => '',
+                                                },
                                                 style: robotoMedium.copyWith(
                                                   fontSize:
                                                       Dimensions.fontSizeLarge,
