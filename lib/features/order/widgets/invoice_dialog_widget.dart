@@ -1037,15 +1037,46 @@ class InvoiceDialogWidget extends StatelessWidget {
                             const SizedBox(height: 3),
                           ],
 
-                          if (order!.deliveryCharge! > 0) ...[
+                          // ──────────── DELIVERY FEE ────────────
+                          // Show the delivery fee line whenever
+                          // `deliveryCharge` is present AND positive.
+                          // The check is null-safe (`?? 0`) so we never
+                          // crash on missing data. The row is placed
+                          // **before** the grand TOTAL (see below).
+                          //
+                          // When the order subtotal (items + addons) is
+                          // less than the small-order threshold
+                          // (currently $20), we emphasize the row so
+                          // operators and customers immediately see why
+                          // a delivery fee was added to a small order.
+                          if ((order!.deliveryCharge ?? 0) > 0 ||
+                              (order!.deliveryCharge != null &&
+                                  (itemsPrice + addOns) < 20)) ...[
                             PriceWidget(
                               title: 'delivery_fee'.tr,
                               value:
-                                  '+ ${_priceDecimal(order!.deliveryCharge!)}',
+                                  '+ ${_priceDecimal(order!.deliveryCharge ?? 0)}',
                               fontSize: fontSize,
+                              emphasized: (itemsPrice + addOns) < 20,
                             ),
+                            if ((itemsPrice + addOns) < 20) ...[
+                              const SizedBox(height: 1),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: Text(
+                                  'small_order_note'.tr,
+                                  style: robotoMedium.copyWith(
+                                    color: Colors.black54,
+                                    fontSize: fontSize - 2,
+                                    fontStyle: FontStyle.italic,
+                                    height: 1.2,
+                                  ),
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 3),
                           ],
+
 
                           if (order!.additionalCharge != null &&
                               order!.additionalCharge! > 0) ...[

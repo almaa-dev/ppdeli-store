@@ -1636,12 +1636,28 @@ class InvoiceReceiptBuilder {
         ),
       );
     }
-    if ((order.deliveryCharge ?? 0) > 0) {
+    // ──────────── DELIVERY FEE ────────────
+    // Mirror the on-screen `InvoiceDialogWidget` behaviour: always show the
+    // DELIVERY FEE line when `order.deliveryCharge` is present and positive.
+    // The condition is null-safe (`?? 0`) so we never emit a row for missing
+    // data, and we ALSO show the row when the order subtotal is below the
+    // small-order threshold ($20) — even if the value happens to be 0 — so
+    // operators and customers always see why a delivery fee may apply on a
+    // small order. The row is emitted **before** the grand TOTAL band below.
+    //
+    // On small orders (subtotal < $20) we prefix the label with `*` so the
+    // customer immediately sees this is a small-order fee; on regular orders
+    // we keep the label clean.
+    final double deliveryCharge = order.deliveryCharge ?? 0;
+    if (deliveryCharge > 0 || (order.deliveryCharge != null && subtotal < 20)) {
+      final String deliveryLabel = subtotal < 20
+          ? '* ${'delivery_fee'.tr}'.toUpperCase()
+          : 'delivery_fee'.tr.toUpperCase();
       bytes.addAll(
         _addPriceLine(
           generator,
-          'delivery_fee'.tr.toUpperCase(),
-          order.deliveryCharge!,
+          deliveryLabel,
+          deliveryCharge,
           signed: true,
           metrics: m,
         ),
