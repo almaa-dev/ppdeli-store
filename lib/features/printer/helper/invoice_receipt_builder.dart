@@ -1538,6 +1538,36 @@ class InvoiceReceiptBuilder {
     if (subtotal > 0 && !isPrescriptionOrder) {
       bytes.addAll(_addPriceLine(generator, 'SUBTOTAL', subtotal, metrics: m));
     }
+    // Small-order threshold — keep this in sync with the constant
+    // defined in `InvoiceDialogWidget` (the on-screen preview) so the
+    // screen and the printed receipt agree on every line.
+    const double smallOrderThreshold = 20.0;
+
+    // The store's configured minimum shipping charge is the value we
+    // fall back to on small orders when the backend did not record a
+    // delivery fee.
+    final double storeMinimumShippingCharge =
+        _store.minimumShippingCharge ?? 0;
+
+    // Pick the delivery charge the receipt MUST print. Mirrors the
+    // rule implemented in `InvoiceDialogWidget._effectiveDeliveryCharge`:
+    //   1. If the backend has already recorded a delivery fee, trust it.
+    //   2. Otherwise, if the subtotal is below the small-order threshold
+    //      AND the store has a minimum shipping charge configured,
+    //      apply it so the customer/operator see the small-order fee.
+    //   3. Otherwise, no delivery fee is shown.
+    final double backendDeliveryCharge = order.deliveryCharge ?? 0;
+    final double effectiveDeliveryCharge = (backendDeliveryCharge > 0)
+        ? backendDeliveryCharge
+        : (subtotal < smallOrderThreshold && storeMinimumShippingCharge > 0
+            ? storeMinimumShippingCharge
+            : 0.0);
+
+    // Whether the receipt had to inject a delivery fee the backend did
+    // not record — used below to decide whether to use the backend's
+    // grand total or a locally recomputed one.
+    final bool injectedDeliveryFee =
+        effectiveDeliveryCharge > backendDeliveryCharge;
 
     // -------------------------------------------------------------------------
     // OPTIONAL CHARGES / DISCOUNTS — only emit a row when the value is > 0.
@@ -1645,19 +1675,21 @@ class InvoiceReceiptBuilder {
     // operators and customers always see why a delivery fee may apply on a
     // small order. The row is emitted **before** the grand TOTAL band below.
     //
-    // On small orders (subtotal < $20) we prefix the label with `*` so the
-    // customer immediately sees this is a small-order fee; on regular orders
-    // we keep the label clean.
-    final double deliveryCharge = order.deliveryCharge ?? 0;
-    if (deliveryCharge > 0 || (order.deliveryCharge != null && subtotal < 20)) {
-      final String deliveryLabel = subtotal < 20
+    // The displayed value uses [effectiveDeliveryCharge] so the row shows
+    // the store's `minimumShippingCharge` on small orders even when the
+    // backend left `order.deliveryCharge` at zero. This is the same value
+    // that is then added into the grand total recomputed below.
+    final bool isSmallOrder = subtotal < smallOrderThreshold;
+    if (effectiveDeliveryCharge > 0 ||
+        (order.deliveryCharge != null && isSmallOrder)) {
+      final String deliveryLabel = isSmallOrder
           ? '* ${'delivery_fee'.tr}'.toUpperCase()
           : 'delivery_fee'.tr.toUpperCase();
       bytes.addAll(
         _addPriceLine(
           generator,
           deliveryLabel,
-          deliveryCharge,
+          effectiveDeliveryCharge,
           signed: true,
           metrics: m,
         ),
@@ -1704,8 +1736,37 @@ class InvoiceReceiptBuilder {
     final int labelW = m.is80mm ? 30 : 16;
     final int valueW = m.maxCharsFontA - labelW;
     final String totalLabel = _padRightFixed('TOTAL', labelW);
+   
+    // Grand total — recompute locally whenever we injected a delivery
+    // fee the backend did not include. This guarantees the printed
+    // TOTAL matches the sum of every line item the customer sees
+    // above it on a small order.
+    //
+    //   total = subtotal
+    //         + tax (only if NOT tax-included)
+    //         + dm tips
+    //         + extra packaging
+    //         + effective delivery charge
+    //         + additional charge
+    //         - store discount
+    //         - coupon discount
+    //         - referral discount
+    final double taxAmount = order.totalTaxAmount ?? 0;
+    final bool taxIncluded = order.taxStatus ?? false;
+    final double computedTotal = subtotal +
+        (taxIncluded ? 0 : taxAmount) +
+        dmTips +
+        (order.extraPackagingAmount ?? 0) +
+        effectiveDeliveryCharge +
+        (order.additionalCharge ?? 0) -
+        (order.storeDiscountAmount ?? 0) -
+        (order.couponDiscountAmount ?? 0) -
+        (order.referrerBonusAmount ?? 0);
+    final double displayedTotal = injectedDeliveryFee
+        ? computedTotal
+        : (order.orderAmount ?? 0);
     final String totalValue = _padLeftFixed(
-      _priceDecimal(order.orderAmount ?? 0),
+      _priceDecimal(displayedTotal),
       valueW,
     );
     // Reset any leftover styles BEFORE the reverse band so the band
