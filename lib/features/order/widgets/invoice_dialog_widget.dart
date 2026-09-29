@@ -178,41 +178,6 @@ class InvoiceDialogWidget extends StatelessWidget {
     return result;
   }
 
-  /// Small-order threshold below which a Delivery Fee is auto-applied
-  /// to the printed invoice even if the backend never persisted one.
-  /// Kept as a constant so the on-screen preview and the ESC/POS
-  /// receipt stay byte-for-byte identical.
-  static const double _smallOrderThreshold = 20.0;
-
-  /// Returns the delivery charge that should be shown on the receipt.
-  ///
-  /// When the order subtotal (items + add-ons) is **below** the
-  /// small-order threshold and the backend did not provide a delivery
-  /// charge (`order.deliveryCharge` is `null` or `0`), we fall back to
-  /// the store's configured `minimumShippingCharge` so the customer
-  /// and the operator always see the small-order fee clearly.
-  ///
-  /// The threshold check is also null-safe on the backend value: a
-  /// `null` `deliveryCharge` is treated as "no fee set by the server"
-  /// and falls back to the local minimum, which is exactly the case
-  /// the new `small-order-note` message is meant to explain.
-  double _effectiveDeliveryCharge(
-    double subtotal,
-    double backendDeliveryCharge,
-    double storeMinimumShippingCharge,
-  ) {
-    if (backendDeliveryCharge > 0) {
-      // Backend has already computed a fee — trust it.
-      return backendDeliveryCharge;
-    }
-    if (subtotal < _smallOrderThreshold && storeMinimumShippingCharge > 0) {
-      // Small order: apply the store-configured minimum shipping
-      // charge so the customer sees why they were charged a fee.
-      return storeMinimumShippingCharge;
-    }
-    return 0.0;
-  }
-
   @override
   Widget build(BuildContext context) {
     final double fontSize = paper80MM ? 13 : 11;
@@ -242,62 +207,6 @@ class InvoiceDialogWidget extends StatelessWidget {
             itemsPrice + (orderDetails.price! * orderDetails.quantity!);
       }
     }
-
-    
-    // Subtotal used by every receipt decision: items + add-ons. This
-    // mirrors what the customer actually paid for before any fees /
-    // taxes / discounts are layered on.
-    final double subtotalForFees = itemsPrice + addOns;
-
-    // Resolve the delivery charge that the receipt MUST display and
-    // MUST include in the grand total. See [_effectiveDeliveryCharge]
-    // for the precedence rules.
-    final double backendDeliveryCharge = order!.deliveryCharge ?? 0;
-    final double effectiveDeliveryCharge = _effectiveDeliveryCharge(
-      subtotalForFees,
-      backendDeliveryCharge,
-      store.minimumShippingCharge ?? 0,
-    );
-
-    // -------------------------------------------------------------------
-    // Grand total — locally recomputed for the small-order case.
-    //
-    // The backend's `order.orderAmount` reflects whatever it persisted,
-    // which on a small order may NOT include the small-order delivery
-    // fee (depending on whether the admin/backend enforces the fee at
-    // order placement time). To guarantee the printed TOTAL always
-    // matches the sum of every line item the customer sees above it,
-    // we recompute the total locally when we are applying the fee on
-    // the fly:
-    //
-    //   total = subtotal
-    //         + tax (only if NOT tax-included)
-    //         + dm tips
-    //         + extra packaging
-    //         + effective delivery charge
-    //         + additional charge
-    //         - store discount
-    //         - coupon discount
-    //         - referral discount
-    // -------------------------------------------------------------------
-    final double taxAmount = order!.totalTaxAmount ?? 0;
-    final bool taxIncluded = order!.taxStatus ?? false;
-    final double computedTotal = (subtotalForFees) +
-        (taxIncluded ? 0 : taxAmount) +
-        dmTips +
-        (order!.extraPackagingAmount ?? 0) +
-        effectiveDeliveryCharge +
-        (order!.additionalCharge ?? 0) -
-        (order!.storeDiscountAmount ?? 0) -
-        (order!.couponDiscountAmount ?? 0) -
-        (order!.referrerBonusAmount ?? 0);
-    // Use the locally-computed total ONLY when we had to inject a
-    // delivery fee the backend did not include. Otherwise trust the
-    // server-provided `order.orderAmount` to avoid drift.
-    final double displayedTotal = (effectiveDeliveryCharge > backendDeliveryCharge)
-        ? computedTotal
-        : (order!.orderAmount ?? 0);
-
 
     return OrientationBuilder(
       builder: (context, orientation) {
@@ -1135,31 +1044,22 @@ class InvoiceDialogWidget extends StatelessWidget {
                           // crash on missing data. The row is placed
                           // **before** the grand TOTAL (see below).
                           //
-                          //
                           // When the order subtotal (items + addons) is
                           // less than the small-order threshold
                           // (currently $20), we emphasize the row so
                           // operators and customers immediately see why
                           // a delivery fee was added to a small order.
-                          //
-                          // The displayed value uses
-                          // [effectiveDeliveryCharge] so the row shows
-                          // the store's `minimumShippingCharge` on
-                          // small orders even when the backend left
-                          // `order.deliveryCharge` at zero. This is the
-                          // value that is then added into the locally
-                          // recomputed grand TOTAL below.
-                          if (effectiveDeliveryCharge > 0 ||
+                          if ((order!.deliveryCharge ?? 0) > 0 ||
                               (order!.deliveryCharge != null &&
-                                  subtotalForFees < 20)) ...[
+                                  (itemsPrice + addOns) < 20)) ...[
                             PriceWidget(
                               title: 'delivery_fee'.tr,
                               value:
-                                  '+ ${_priceDecimal(effectiveDeliveryCharge)}',
+                                  '+ ${_priceDecimal(order!.deliveryCharge ?? 0)}',
                               fontSize: fontSize,
-                              emphasized: subtotalForFees < 20,
+                              emphasized: (itemsPrice + addOns) < 20,
                             ),
-                            if (subtotalForFees < 20) ...[
+                            if ((itemsPrice + addOns) < 20) ...[
                               const SizedBox(height: 1),
                               Padding(
                                 padding: const EdgeInsets.only(left: 2),
@@ -1217,7 +1117,7 @@ class InvoiceDialogWidget extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            _priceDecimal(displayedTotal),
+                            _priceDecimal(order!.orderAmount!),
                             style: robotoBlack.copyWith(
                               color: Colors.white,
                               fontSize: fontSize + 5,
