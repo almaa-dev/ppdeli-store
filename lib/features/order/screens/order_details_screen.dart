@@ -304,6 +304,98 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
     }
   }
 
+
+  /// Returns the elegant "Cancel Order" button displayed just under the
+  /// Billing Summary card. Tapping it prompts a confirmation dialog; if
+  /// the vendor confirms, the order status is changed to [AppConstants.canceled].
+  Widget _buildCancelOrderButton({
+    required BuildContext context,
+    required int orderId,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: Dimensions.paddingSizeSmall,
+        vertical: Dimensions.paddingSizeSmall,
+      ),
+      child: Container(
+        width: MediaQuery.of(context).size.width,
+        decoration: BoxDecoration(
+          color: Colors.red.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(Dimensions.radiusDefault),
+          border: Border.all(
+            color: Colors.red.withValues(alpha: 0.35),
+            width: 1,
+          ),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(Dimensions.radiusDefault),
+            onTap: () {
+              Get.dialog(
+                ConfirmationDialogWidget(
+                  icon: Images.warning,
+                  title: 'are_you_sure_to_cancel'.tr,
+                  description: 'you_want_to_cancel_this_order'.tr,
+                  onYesPressed: () {
+                    Get.find<OrderController>().setOrderCancelReason(
+                      'canceled_by_store',
+                    );
+                    Get.find<OrderController>().updateOrderStatus(
+                      orderId,
+                      AppConstants.canceled,
+                      back: true,
+                      reason: 'canceled_by_store',
+                    );
+                  },
+                  onYesButtonText: 'cancel'.tr,
+                  onNoButtonText: 'no'.tr,
+                  isOnNoPressedShow: true,
+                ),
+                barrierDismissible: false,
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Dimensions.paddingSizeDefault,
+                vertical: Dimensions.paddingSizeDefault,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(
+                      Dimensions.paddingSizeSmall,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.cancel_outlined,
+                      color: Colors.red,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: Dimensions.paddingSizeSmall),
+                  Text(
+                    'cancel_order'.tr,
+                    style: robotoBold.copyWith(
+                      color: Colors.red,
+                      fontSize: Dimensions.fontSizeLarge,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+
   @override
   void dispose() {
     super.dispose();
@@ -2873,6 +2965,21 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen>
                               )
                             : const SizedBox(),
 
+                        /// Cancel Order Button — shown for every status except
+                        /// `delivered`, `canceled`, `refunded`.
+                        if (controllerOrderModel.orderStatus !=
+                                AppConstants.delivered &&
+                            controllerOrderModel.orderStatus !=
+                                AppConstants.canceled &&
+                            controllerOrderModel.orderStatus !=
+                                AppConstants.refunded &&
+                            cancelPermission! &&
+                            controllerOrderModel.id != null)
+                          _buildCancelOrderButton(
+                            context: context,
+                            orderId: controllerOrderModel.id!,
+                          ),
+                          
                         showDeliveryConfirmImage &&
                                 controllerOrderModel.orderStatus != 'delivered'
                             ? Container(

@@ -347,6 +347,7 @@
   "select_at_least_one_item_type": "Select at least one item type",
   "confirm": "Confirm",
   "cancel": "Cancel",
+  "cancel_order": "Cancel Order",
   "are_you_sure_to_cancel": "Are you sure to cancel?",
   "you_want_to_cancel_this_order": "You want to cancel this order?",
   "version": "Version",
